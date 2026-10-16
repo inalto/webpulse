@@ -35,7 +35,7 @@ and an archive containing symbolic or hard links is refused before it is unpacke
 | `--uninstall`         | remove everything WebPulse registered; statistics and config are kept |
 | `--purge`             | with `--uninstall`: also delete `/var/webpulse` and `/etc/webpulse` |
 | `--standalone`        | no cPanel: install only the CLI and the dev server (no plugins, hooks or cron) |
-| `--all-themes`        | install the cPanel plugin into every theme under `/usr/local/cpanel/base/frontend/`, not only `jupiter` |
+| `--all-themes`        | install the cPanel plugin into every directory under `/usr/local/cpanel/base/frontend/`; by default every theme with a `dynamicui.conf` (Jupiter, Meridian) is installed |
 | `--theme <name>`      | additionally install into this theme (repeatable) |
 | `-y`, `--yes`         | do not ask for confirmation (also implied when stdin is not a terminal, as with `curl \| bash`) |
 | `-h`, `--help`        | print the options |
@@ -264,7 +264,8 @@ asks for it. Re-installing later picks up the kept data.
   `/usr/local/cpanel/base/frontend/jupiter/dynamicui/` (location may differ between cPanel versions). If
   it is absent the registration did not run or failed; if present, log out of cPanel and back in so the
   page is rebuilt. Also check that the files exist: `ls /usr/local/cpanel/base/frontend/jupiter/webpulse/`.
-* Using another theme? Install with `--theme <name>` or `--all-themes`.
+* Using another theme? Jupiter and Meridian are detected automatically (any theme directory with a `dynamicui.conf`); for anything else install with `--theme <name>` or `--all-themes`.
+* Icon missing in Jupiter's Metrics group? Jupiter compiles every application icon into one sprite SVG and drops `<defs>`, so icons must use solid fills only (no gradients, `<title>`, `<style>` or ids). The shipped icon follows that rule since 0.2.1; after replacing an icon run `/usr/local/cpanel/bin/sprite_generator` or wait for the scheduled rebuild.
 
 **The WHM entry is missing (WHM » Plugins » WebPulse Analytics)**
 * `ls /var/cpanel/apps/webpulse.conf` must exist; if not, run

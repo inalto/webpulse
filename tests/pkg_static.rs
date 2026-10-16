@@ -314,7 +314,15 @@ fn svg_icons_are_well_formed_48x48_and_identical() {
             .unwrap_or_else(|| panic!("{}: no <svg> element", p.display()))
             .as_str();
         assert_contains(tag, r#"viewBox="0 0 48 48""#, "viewBox");
-        assert_contains(tag, r#"width="48""#, "width");
+        // Jupiter flattens all icons into one sprite SVG and drops <defs>: a gradient or
+        // any url(#id) reference renders as an invisible square there.
+        for forbidden in ["<defs", "url(#", "<title", "<style", " id="] {
+            assert!(
+                !svg.contains(forbidden),
+                "{}: {forbidden} is not sprite-safe",
+                p.display()
+            );
+        }
         assert!(
             svg.trim_end().ends_with("</svg>"),
             "{}: closed",

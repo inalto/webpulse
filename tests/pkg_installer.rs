@@ -439,6 +439,39 @@ fn no_cron_and_standalone() {
 }
 
 #[test]
+fn every_theme_with_a_dynamicui_conf_is_installed_by_default() {
+    let p = Sandbox::new();
+    let fe = p.cpanel.join("base/frontend");
+    std::fs::create_dir_all(fe.join("meridian")).unwrap();
+    std::fs::write(fe.join("meridian/dynamicui.conf"), "[]\n").unwrap();
+    std::fs::create_dir_all(fe.join("paper_lantern")).unwrap(); // no dynamicui.conf: not a theme
+    make_source(&p, "0.1.0", None, "stub");
+    let (rc, out) = p.installer(&p.src, &["-y"]).go();
+    assert_eq!(rc, 0, "{out}");
+    for t in ["jupiter", "meridian"] {
+        assert_exists(&fe.join(format!("{t}/webpulse/index.live.php")));
+        assert_exists(&fe.join(format!("{t}/webpulse/webpulse.svg")));
+        assert_exists(&p.state.join(format!("plugin.{t}")));
+    }
+    assert_missing(&fe.join("paper_lantern/webpulse"));
+    assert_missing(&p.state.join("plugin.paper_lantern"));
+    let log = p.stub_log();
+    assert!(
+        log.iter()
+            .any(|l| l.contains("install_plugin") && l.ends_with("--theme meridian")),
+        "{}",
+        log.join("|")
+    );
+    // uninstall unregisters from both
+    let (rc, out) = p.installer(&p.src, &["--uninstall", "-y"]).go();
+    assert_eq!(rc, 0, "{out}");
+    for t in ["jupiter", "meridian"] {
+        assert_missing(&fe.join(format!("{t}/webpulse")));
+        assert_missing(&p.state.join(format!("plugin.{t}")));
+    }
+}
+
+#[test]
 fn all_themes_and_theme_install_into_the_extra_themes() {
     let p = Sandbox::new();
     std::fs::create_dir_all(p.cpanel.join("base/frontend/paper_lantern")).unwrap();

@@ -31,7 +31,8 @@ Usage: install.sh [options]
   --uninstall             remove plugins, hooks, cron and code; keeps /var/webpulse and /etc/webpulse
   --purge                 with --uninstall: also delete /var/webpulse (all statistics) and /etc/webpulse
   --standalone            no cPanel: install only the CLI and the dev server
-  --all-themes            also install the cPanel plugin into every theme under base/frontend/
+  --all-themes            install the cPanel plugin into every directory under base/frontend/
+                          (by default: every theme with a dynamicui.conf, e.g. jupiter and meridian)
   --theme <name>          also install the cPanel plugin into this theme (repeatable)
   -y, --yes               do not ask for confirmation (also implied when stdin is not a terminal)
   -h, --help              show this help

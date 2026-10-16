@@ -4,6 +4,16 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-16
+
+### Fixed
+- cPanel Jupiter: the Metrics icon was invisible because Jupiter flattens all
+  application icons into one sprite SVG and drops `<defs>`; the icon now uses
+  solid fills only (no gradient).
+- cPanel Meridian: the plugin was only registered in Jupiter; the installer now
+  installs into every theme that ships a `dynamicui.conf` (Jupiter, Meridian).
+  Existing installations pick this up with `install.sh --update`.
+
 ## [0.2.0] - 2026-10-16
 
 ### Rewritten in Rust
@@ -111,5 +121,6 @@ First public version.
   resellers no longer read global settings; log messages are sanitised; `\z` anchors in name validation and a
   single account-name rule.
 
+[0.2.1]: https://github.com/inalto/webpulse/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/inalto/webpulse/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/inalto/webpulse/releases/tag/v0.1.0

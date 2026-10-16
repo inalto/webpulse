@@ -63,6 +63,16 @@ Register / unregister:
 /usr/local/cpanel/scripts/install_plugin   /usr/local/webpulse/cpanel/plugin --theme jupiter
 /usr/local/cpanel/scripts/uninstall_plugin /usr/local/webpulse/cpanel/plugin --theme jupiter
 ```
+The installer registers the plugin in every theme that has a `dynamicui.conf`
+under `/usr/local/cpanel/base/frontend/` (Jupiter and Meridian on current
+servers). Icon rules learned on a real server: Jupiter merges all application
+icons into `assets/application_icons/sprites/icon_spritemap.svg` with
+`sprite_generator` (scheduled by `install_plugin`) and drops `<defs>`, so an
+icon using a gradient or any `url(#id)` reference renders as an empty square.
+Icons must use solid fills only, `viewBox` without `width`/`height`, no
+`<title>`, `<style>` or ids. Meridian reads `assets/application_icons/<id>.svg`
+directly (formats svg/png, see the theme's `config.json`).
+
 `featuremanager: 1` adds a "WebPulse Analytics" feature to WHM » Feature
 Manager, so hosts can hide the icon per package. Collection is governed
 separately by the WHM plugin switches.

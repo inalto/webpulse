@@ -104,23 +104,20 @@ def write_png(path, rows):
 
 
 def svg():
-    points = " ".join("%g,%g" % p for p in POLYLINE)
-    lo = MARGIN
-    side = SIZE - 2 * MARGIN
+    """48x48 icon as cPanel themes expect it.
+
+    Jupiter merges every application icon into one sprite SVG and drops <defs>, so a
+    gradient referenced with url(#id) renders as an invisible square. The icon therefore
+    uses only solid fills, no <defs>, <title>, <style>, width/height or ids, like the
+    icons that ship with cPanel (viewBox only).
+    """
     return (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">\n'
-        '  <title>WebPulse Analytics</title>\n'
-        '  <defs>\n'
-        '    <linearGradient id="wp-bg" x1="0" y1="0" x2="0" y2="1">\n'
-        '      <stop offset="0" stop-color="#%02x%02x%02x"/>\n'
-        '      <stop offset="1" stop-color="#%02x%02x%02x"/>\n'
-        '    </linearGradient>\n'
-        '  </defs>\n'
-        '  <rect x="%g" y="%g" width="%g" height="%g" rx="%g" ry="%g" fill="url(#wp-bg)"/>\n'
-        '  <polyline points="%s" fill="none" stroke="#ffffff" stroke-width="%g"'
-        ' stroke-linecap="round" stroke-linejoin="round"/>\n'
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">'
+        '<rect x="2" y="2" width="44" height="44" rx="10" ry="10" fill="#2563eb"/>'
+        '<polyline points="8,27 16,27 20,14 26,36 30,22 33,27 40,27" fill="none" '
+        'stroke="#ffffff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>'
         '</svg>\n'
-    ) % (BLUE + BLUE_DARK + (lo, lo, side, side, RADIUS, RADIUS, points, STROKE))
+    )
 
 
 def write_text(path, text):

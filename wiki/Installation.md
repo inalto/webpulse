@@ -73,7 +73,7 @@ When stdin is not a terminal, as in `curl | bash`, the installer does not ask fo
 | `--uninstall` | Remove WebPulse; statistics and configuration are kept. |
 | `--purge` | With `--uninstall`: also delete `/var/webpulse` and `/etc/webpulse`. |
 | `--standalone` | No cPanel: install only the CLI and the dev server. No plugins, hooks or cron. |
-| `--all-themes` | Install the cPanel plugin into every theme under `/usr/local/cpanel/base/frontend/`. |
+| `--all-themes` | Install the cPanel plugin into every directory under `/usr/local/cpanel/base/frontend/`. By default every theme with a `dynamicui.conf` (Jupiter, Meridian) is installed. |
 | `--theme <name>` | Also install into this theme. Repeatable. |
 | `-y`, `--yes` | Do not ask for confirmation. |
 | `-h`, `--help` | Print the options. |

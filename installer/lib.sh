@@ -393,17 +393,23 @@ wp_activate_release() {
 
 # --------------------------------------------------------------- themes ---
 
+# Default: every real cPanel theme on the server, i.e. a directory under base/frontend/
+# that ships a dynamicui.conf (Jupiter, Meridian, ...) plus the well-known names when
+# present. --all-themes takes every directory, --theme adds names explicitly.
 wp_select_themes() {
-    local t
+    local t name
     WP_THEMES=()
-    if [ "${WP_ALL_THEMES:-0}" = 1 ] && [ -d "$THEME_ROOT" ]; then
+    if [ -d "$THEME_ROOT" ]; then
         for t in "$THEME_ROOT"/*/; do
             [ -d "$t" ] || continue
-            WP_THEMES+=("$(basename "$t")")
+            name=$(basename "$t")
+            case "$name" in ''|.*|*[!A-Za-z0-9._-]*) continue ;; esac
+            if [ "${WP_ALL_THEMES:-0}" = 1 ] || [ -f "$t/dynamicui.conf" ] || [ "$name" = jupiter ] || [ "$name" = meridian ]; then
+                WP_THEMES+=("$name")
+            fi
         done
-    else
-        WP_THEMES+=("jupiter")
     fi
+    [ "${#WP_THEMES[@]}" -gt 0 ] || WP_THEMES+=("jupiter")
     for t in ${WP_EXTRA_THEMES[@]+"${WP_EXTRA_THEMES[@]}"}; do
         case " ${WP_THEMES[*]} " in *" $t "*) ;; *) WP_THEMES+=("$t") ;; esac
     done
@@ -456,7 +462,7 @@ wp_install_cpanel_plugin() {
     for t in "${WP_THEMES[@]}"; do
         if [ ! -d "$THEME_ROOT/$t" ]; then
             if [ "$t" = jupiter ]; then
-                wp_fail "Theme directory $THEME_ROOT/$t not found. Is this a supported cPanel version (Jupiter theme)?"
+                wp_fail "Theme directory $THEME_ROOT/$t not found. Is this a supported cPanel version (Jupiter or Meridian theme)?"
             fi
             wp_warn "Theme '$t' not found under $THEME_ROOT, skipped"
             continue

@@ -110,7 +110,7 @@ want to build it yourself?** `install.sh --build` downloads the source and runs 
 | `--uninstall` | Remove plugins, hooks, cron and code. Keeps `/var/webpulse` and `/etc/webpulse`. |
 | `--purge` | With `--uninstall`: also delete `/var/webpulse` (all statistics) and `/etc/webpulse`. |
 | `--standalone` | No cPanel: install only the CLI and the dev server. |
-| `--all-themes` | Also install the cPanel plugin into every theme under `/usr/local/cpanel/base/frontend/`. |
+| `--all-themes` | Install the cPanel plugin into every directory under `/usr/local/cpanel/base/frontend/`. By default it is installed into every theme that has a `dynamicui.conf` (Jupiter, Meridian). |
 | `--theme <name>` | Also install the cPanel plugin into this theme (repeatable). |
 | `-y`, `--yes` | Do not ask for confirmation (implied when stdin is not a terminal). |
 | `-h`, `--help` | Print the options. |
