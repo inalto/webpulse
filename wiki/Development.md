@@ -7,8 +7,9 @@ things, where the code lives and the rules for contributions.
 ## Requirements
 
 A stable Rust toolchain ([rustup](https://rustup.rs)) and a C compiler (SQLite is bundled), plus `make`.
-Optional: `php` 8.1 or later with `pdo_sqlite` (it runs the packaging tests and the parity harness; PHP is
-not used by the program any more), `sqlite3`, `jq`, `shellcheck` and Node.js (JavaScript syntax check).
+Optional: `php` (the tests run the two cPanel shims with it and skip them without it; PHP is not used by
+the program), `php` 8.1 or later with `pdo_sqlite` plus `sqlite3` and `jq` for the parity harness,
+`shellcheck` and Node.js (JavaScript syntax check).
 
 ```bash
 git clone https://github.com/inalto/webpulse.git
@@ -22,7 +23,7 @@ cargo build --release          # -> target/release/webpulse
 | Command | What it does |
 |---------|--------------|
 | `make build` | `cargo build --release`. |
-| `make test` | `cargo test --release`, then the packaging tests (`php tests/run.php pkg_`) and the parity harness (`tests/parity/run.sh`) when `php` is installed. |
+| `make test` | `cargo test --release` (engine, web and packaging tests), then the parity harness (`tests/parity/run.sh`) when `php` is installed. |
 | `make lint` | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, shellcheck and `php -l` of the cPanel shims. |
 | `make fmt` | `cargo fmt`. |
 | `make fixtures` | Build `tests/tmp/dev/`: 45 days of generated sample logs (seed 42), a development config, then setup, collect, backfill and rollup, all with the Rust binary. |
@@ -75,20 +76,20 @@ The sample logs come from `webpulse dev gen-logs`, a generator with a seed (diur
 ## Tests
 
 ```bash
-cargo test --release              # unit and integration tests of the Rust code
-php tests/run.php pkg_            # packaging tests: installer, shims, hooks, release tarballs
-php tests/run.php pkg_hooks       # one file; a filter also matches the test name
-tests/parity/run.sh               # Rust vs the 0.1.0 PHP engine (needs php >= 8.1)
+cargo test --release                      # every test: engine, web, CLI and packaging
+cargo test --release --test pkg_installer  # one file (tests/pkg_installer.rs); add a name filter to narrow
+tests/parity/run.sh                       # Rust vs the 0.1.0 PHP release (needs php >= 8.1)
 ```
 
-The packaging tests (`tests/cases/pkg_*.php`) use PHP only as a runner: `tests/run.php` is a small
-dependency-free runner and a test fails when it throws. They run `install.sh` in a temporary directory with
-`WEBPULSE_PREFIX` and `WEBPULSE_FAKE_CPANEL=1`, a stub binary in the release layout and `file://` downloads
-(checksum verification, missing release asset, `--binary`, `--build` with a fake `cargo`), run the PHP and
-bash shims against a stub binary that prints a CGI response, and check the hooks, the tarballs and the
-static files. They cannot show how the real cPanel tools behave. The parity harness checks out tag
-`v0.1.0`, runs the PHP engine and the Rust binary on the same generated logs and compares tables, counters
-and the JSON of every API action.
+The packaging tests (`tests/pkg_*.rs`) are Rust integration tests like the others. They run `install.sh`
+in a temporary directory with `WEBPULSE_PREFIX` and `WEBPULSE_FAKE_CPANEL=1`, stub cPanel tools that log
+their invocations, a stub binary in the release layout and `file://` downloads (checksum verification,
+missing release asset, `--binary`, `--build` with a fake `cargo`, and one install of the real binary). They
+run the cPanel shims with the `php` CLI (a stub `CPANEL` class is prepended, `WEBPULSE_BIN` points at a
+stub binary that prints a CGI response; skipped when `php` is missing) and the bash WHM CGIs, and check the
+hooks, the tarballs and the static files. They cannot show how the real cPanel tools behave. The parity
+harness checks out tag `v0.1.0`, runs the 0.1.0 PHP engine and the Rust binary on the same generated logs
+and compares tables, counters and the JSON of every API action.
 
 ## Releases
 
@@ -96,7 +97,7 @@ Bump `VERSION` and the `version` in `Cargo.toml`, update `CHANGELOG.md`, commit 
 `.github/workflows/release.yml` builds static `x86_64` and `aarch64` musl binaries with `cargo-zigbuild`,
 packs them with `scripts/build_release.sh` (tarball + `.sha256`), builds the source tarball and uploads
 everything to the GitHub release; `install.sh` installs from there. CI (`ci.yml`) runs `cargo fmt --check`,
-`cargo clippy -D warnings`, `cargo test`, the packaging tests, the parity harness and shellcheck.
+`cargo clippy -D warnings`, `cargo test` (packaging tests included), the parity harness and shellcheck.
 
 ## Code layout
 
@@ -109,7 +110,7 @@ hooks/                  Standardized Hook scripts (bash)
 etc/                    config.json.default, cron.d/webpulse
 install.sh, uninstall.sh, installer/lib.sh   the installer
 scripts/                build_release.sh, build_dist.sh, devenv.sh, geoip_fixture.sh, make_icons.py, publish_wiki.sh
-tests/                  Rust integration tests, parity/, cases/pkg_*.php + run.php, fixtures/
+tests/                  Rust integration tests (engine_*, http_*, pkg_*), parity/, fixtures/
 docs/                   technical documentation
 wiki/                   the pages of this wiki
 ```

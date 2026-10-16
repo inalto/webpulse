@@ -116,7 +116,7 @@ listing=$(tar -tzf "$out")
 for required in bin/webpulse installer/lib.sh install.sh uninstall.sh VERSION etc/config.json.default etc/cron.d/webpulse \
     cpanel/plugin/install.json cpanel/webpulse/index.live.php cpanel/webpulse/api.live.php whm/cgi/index.cgi whm/cgi/api.cgi \
     whm/webpulse.conf hooks/stats_runall_pre.sh hooks/stats_runuser_pre.sh; do
-    if ! printf '%s\n' "$listing" | grep -qxF "$name/$required"; then
+    if ! grep -qxF "$name/$required" <<<"$listing"; then
         echo "build_release: $name/$required is missing from the archive" >&2
         rm -f "$out"
         exit 1

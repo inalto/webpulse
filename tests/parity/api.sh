@@ -8,14 +8,15 @@
 # tests/tmp/parity/php and tests/tmp/parity/rust, as left by db.sh). They may
 # be the same directory (e.g. a SeedDb fixture). The clock is WEBPULSE_NOW,
 # else the content of <PHP_ROOT>/now. The legacy code is taken from
-# $WEBPULSE_LEGACY_LIB, else tests/tmp/legacy/lib, else lib/ of this checkout.
+# $WEBPULSE_LEGACY_LIB, else tests/tmp/legacy/lib (the v0.1.0 checkout of db.sh).
 # The binary is $WEBPULSE_BIN, else target/release/webpulse, else
 # target/debug/webpulse.
 #
 # Every JSON response is compared after `jq -S 'del(.meta.took_ms,
 # .meta.generated_at)'` (the official criterion; database file sizes are
-# ignored when the two roots differ) and, more strictly, byte for
-# byte with those two values blanked (reported, not fatal: `jq` 1.6 hides the
+# ignored when the two roots differ, and the product version string that
+# `ping` and `admin.overview` report is blanked: 0.1.0 against the current
+# release) and, more strictly, byte for byte with those values blanked (reported, not fatal: `jq` 1.6 hides the
 # int/float distinction). CSV exports are compared byte for byte, with their
 # Content-Disposition. Diffs are written to tests/tmp/parity/api-diff/.
 # Exit status: 0 when everything matches, 1 otherwise, 2 on setup errors.
@@ -37,9 +38,9 @@ command -v "$PHP" >/dev/null || die "php is required"
 
 LIB=${WEBPULSE_LEGACY_LIB:-}
 if [ -z "$LIB" ]; then
-    if [ -f "$REPO/tests/tmp/legacy/lib/autoload.php" ]; then LIB=$REPO/tests/tmp/legacy/lib; else LIB=$REPO/lib; fi
+    LIB=$REPO/tests/tmp/legacy/lib # the v0.1.0 checkout made by db.sh
 fi
-[ -f "$LIB/autoload.php" ] || die "legacy PHP library not found ($LIB)"
+[ -f "$LIB/autoload.php" ] || die "legacy PHP library not found ($LIB); run tests/parity/run.sh"
 
 BIN=${WEBPULSE_BIN:-}
 if [ -z "$BIN" ]; then
@@ -72,7 +73,7 @@ rust_one() {
     local hdr=$WORK/r.hdr raw=$WORK/r.raw bodyf=$WORK/r.body
     printf '%s' "$body" | env WEBPULSE_CONFIG="$RUST_ROOT/config.json" WEBPULSE_CGI_TESTING=1 \
         REQUEST_METHOD="$method" QUERY_STRING="$qs" CONTENT_LENGTH="${#body}" REMOTE_ADDR=203.0.113.9 \
-        REMOTE_USER="${who#whm:}" HTTP_X_WEBPULSE_REQUEST=$([ "$method" = POST ] && echo 1) \
+        REMOTE_USER="${who#whm:}" HTTP_X_WEBPULSE_REQUEST="$([ "$method" = POST ] && echo 1)" \
         "$BIN" "${args[@]}" > "$raw" 2>/dev/null
     sed -n '1,/^\r$/p' "$raw" | tr -d '\r' > "$hdr"
     sed '1,/^\r$/d' "$raw" > "$bodyf"
@@ -209,14 +210,14 @@ fi
 
 # --- compare ----------------------------------------------------------------------------------
 total=0 same=0 bytes=0 failed=0
-norm='del(.meta.took_ms, .meta.generated_at)'
+norm='del(.meta.took_ms, .meta.generated_at) | walk(if type == "object" and (.version | type) == "string" then .version = "" else . end)'
 # Two engines write the same rows into SQLite files of different sizes: when the
 # roots differ, file sizes (db_bytes, data_bytes, registry_bytes) are not compared.
 if [ "$(cd "$PHP_ROOT" && pwd -P)" != "$(cd "$RUST_ROOT" && pwd -P)" ]; then
     norm="$norm | walk(if type == \"object\" then del(.db_bytes, .data_bytes, .registry_bytes) else . end)"
     SIZES_IGNORED=1
 fi
-blank() { sed -E 's/"took_ms":[0-9]+/"took_ms":0/; s/"generated_at":"[^"]*"/"generated_at":""/'; }
+blank() { sed -E 's/"took_ms":[0-9]+/"took_ms":0/; s/"generated_at":"[^"]*"/"generated_at":""/; s/"version":"[^"]*"/"version":""/g'; }
 n=$(wc -l < "$REQ")
 for i in $(seq 1 "$n"); do
     total=$((total + 1))

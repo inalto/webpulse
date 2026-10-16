@@ -20,6 +20,21 @@ pub fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// The 0.1.0 PHP release, for the tests that compare with it: `$WEBPULSE_LEGACY`,
+/// else `tests/tmp/legacy` (the checkout of tag v0.1.0 that `tests/parity/run.sh`
+/// creates). `None` when it is absent or `php` is not installed (those tests skip).
+pub fn legacy_php() -> Option<PathBuf> {
+    let dir = std::env::var_os("WEBPULSE_LEGACY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo().join("tests/tmp/legacy"));
+    let php = Command::new("php")
+        .arg("-v")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    (php && dir.join("lib/autoload.php").is_file()).then_some(dir)
+}
+
 /// The binary under test.
 pub fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_webpulse"))

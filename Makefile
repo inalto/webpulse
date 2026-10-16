@@ -1,8 +1,8 @@
 # WebPulse - developer tasks (no cPanel needed). See docs/DEVELOPMENT.md.
 #
 #   make build            cargo build --release            -> target/release/webpulse
-#   make test             cargo tests + PHP packaging tests + parity harness (when php exists)
-#   make lint             cargo fmt --check, clippy, shellcheck, php -l of the shims
+#   make test             cargo test (engine, web, packaging) + parity harness (when php exists)
+#   make lint             cargo fmt --check, clippy, shellcheck, php -l of the cPanel shims
 #   make fixtures         fake cPanel server with generated logs in tests/tmp/dev
 #   make serve            dev dashboard for the account "alice" on http://127.0.0.1:$(PORT)
 #   make serve-admin      dev dashboard as server administrator
@@ -21,22 +21,20 @@ DEVCFG  := $(DEVDIR)/config.json
 SHELL_FILES = install.sh uninstall.sh installer/lib.sh hooks/*.sh scripts/*.sh whm/cgi/*.cgi
 PHP_SHIMS   = cpanel/webpulse/index.live.php cpanel/webpulse/api.live.php cpanel/webpulse/lib/*.php
 
-.PHONY: build test test-rust test-pkg test-parity lint fmt fixtures serve serve-admin dist release geoip-fixture clean
+.PHONY: build test test-rust test-parity lint fmt fixtures serve serve-admin dist release geoip-fixture clean
 
 build:
 	$(CARGO) build --release
 
-test: test-rust test-pkg test-parity
+test: test-rust test-parity
 
+# every test is a Rust integration test (tests/*.rs), the packaging ones included
+# (tests/pkg_*.rs: installer, hooks, release scripts; the cPanel shim tests use php
+# when it is installed and are skipped otherwise)
 test-rust:
 	$(CARGO) test --release
 
-# packaging tests (installer, shims, hooks, static checks): PHP is only the test runner
-test-pkg:
-	@if command -v $(PHP) >/dev/null 2>&1; then $(PHP) tests/run.php pkg_; \
-	else echo "php not found: skipping the packaging tests (tests/run.php pkg_)"; fi
-
-# Rust vs 0.1.0 PHP engine; needs php >= 8.1 and the legacy checkout the script prepares
+# Rust vs the 0.1.0 PHP release; needs php >= 8.1 and checks out tag v0.1.0 into tests/tmp/legacy
 test-parity: build
 	@if [ -x tests/parity/run.sh ] && command -v $(PHP) >/dev/null 2>&1; then tests/parity/run.sh; \
 	else echo "skipping the parity harness (needs php and tests/parity/run.sh)"; fi

@@ -204,19 +204,13 @@ fn backtracking_order_matches_the_regex() {
     assert!(p.hit().vhost().is_none());
 }
 
-/// Same results as the PHP regex for every fixture line and a set of mutations.
+/// Same results as the 0.1.0 PHP regex for every fixture line and a set of mutations.
 #[test]
 fn matches_the_php_implementation_when_available() {
-    if std::process::Command::new("php")
-        .arg("-v")
-        .output()
-        .map(|o| !o.status.success())
-        .unwrap_or(true)
-        || !common::repo().join("lib/autoload.php").is_file()
-    {
-        eprintln!("php or lib/ not available: skipped");
+    let Some(legacy) = common::legacy_php() else {
+        eprintln!("php or the 0.1.0 checkout (tests/tmp/legacy) not available: skipped");
         return;
-    }
+    };
     let mut lines = fixture();
     let base = fixture()[0].clone();
     for cut in [10, 30, 60, 90, 120, 150, 200, base.len() - 1] {
@@ -242,7 +236,7 @@ fn matches_the_php_implementation_when_available() {
     let out = std::process::Command::new("php")
         .arg("-r")
         .arg(script)
-        .arg(common::repo())
+        .arg(&legacy)
         .arg(&input)
         .output()
         .unwrap();

@@ -1,7 +1,7 @@
 # Roadmap
 
 This page lists ideas that the project documents as **non-goals for now** or as deferred. **None of
-them is implemented** in version 0.1.0. They are not promises and have no dates. If one matters to you,
+them is implemented** in version 0.2.0. They are not promises and have no dates. If one matters to you,
 open an issue and say why.
 
 | Idea | Status | Where it is mentioned |

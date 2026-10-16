@@ -2,7 +2,7 @@
 
 All databases are SQLite 3 (`journal_mode=DELETE`, `synchronous=NORMAL`,
 `foreign_keys=ON`, `busy_timeout=5000`). Schema migrations are numbered in
-`meta.schema_version` and applied by `WebPulse\Store\Migrator` on open (writer
+`meta.schema_version` and applied by `engine::store::migrate` on open (writer
 side only; the read-only dashboard refuses to open a DB with a newer schema
 than it knows and shows a friendly message).
 

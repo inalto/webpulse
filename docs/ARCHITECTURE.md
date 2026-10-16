@@ -2,10 +2,14 @@
 
 ## Goals and non-goals
 
-* **Lightweight.** One language (PHP ≥ 8.1, the `/usr/local/cpanel/3rdparty/bin/php`
-  that every cPanel server ships), SQLite via the `pdo_sqlite` extension, no
-  Composer, no daemon, no external service, no JavaScript tracker on customer
-  sites. Vanilla JS + inline SVG charts in the dashboard (no chart library).
+* **Lightweight.** One statically linked Rust binary, `webpulse` (since 0.2.0;
+  0.1.0 was PHP): SQLite is compiled in (`rusqlite` with the bundled SQLite),
+  GeoIP lookups use the `maxminddb` crate, and there is no interpreter, no
+  daemon, no external service and no JavaScript tracker on customer sites. The
+  only PHP involved is cPanel's own, which runs the two LiveAPI shims of the
+  cPanel plugin (cPanel requires `*.live.php` pages to be PHP or Perl). Vanilla
+  JS + inline SVG charts in the dashboard (no chart library), embedded in the
+  binary.
 * **Log based.** Everything is derived from the per-domain Apache/Nginx access
   logs (`domlogs`) that cPanel already writes in *combined* format.
 * **Rotation proof.** State lives in SQLite; logs are tailed with
@@ -29,7 +33,7 @@
                                     ▼
                           ┌──────────────────┐
                           │  bin/webpulse    │  collect / backfill / rollup / status / accounts …
-                          │  (PHP CLI, root) │
+                          │ (Rust, cron root)│
                           └───────┬──────────┘
             Discovery ◀───────────┤──────────▶ Registry  /var/webpulse/webpulse.db
    /etc/userdomains               │             (accounts, domain switches, settings, jobs, salts)
@@ -42,11 +46,12 @@
                                   │
           ┌───────────────────────┼─────────────────────────────┐
           ▼                       ▼                             ▼
- cPanel plugin (LiveAPI PHP)   WHM plugin (PHP CGI, root)     bin/webpulse serve (dev)
- runs as the account,          sees every domain, toggles     php -S router, fake principal
- opens own DBs read-only       accounts, settings, jobs
+ cPanel plugin (LiveAPI shims) WHM plugin (bash CGI, root)    webpulse serve (dev)
+ *.live.php → webpulse cgi     exec webpulse cgi --whm,       built-in HTTP server,
+ --principal user:U, runs as   sees every domain, toggles     token, fake principal
+ the account, DBs read-only    accounts, settings, jobs
           └───────────────────────┴─────────────────────────────┘
-                              WebPulse\Http\Api  +  WebPulse\Http\Page (shared SPA, inline JS/CSS)
+                 src/http: JSON API + page rendering (shared SPA, ui/*.js and app.css embedded)
 ```
 
 ### Collector pipeline (`webpulse collect`)
@@ -70,7 +75,8 @@
    size < offset → file truncated, start at 0; otherwise seek to offset.
    Reads in 1 MiB chunks, never loads a file in memory, stops at the last
    complete line, stores the new offset only after the DB transaction commits.
-   A `.gz` source (backfill) is streamed with `gzopen`.
+   A `.gz` source (backfill) is streamed through `flate2` in slices with an
+   output cap.
 3. **LogParser** parses *combined* lines with a tolerant regex (optional
    leading `%v` vhost, optional trailing fields, `-` for empty size, IPv6,
    malformed request lines such as `"-"` or `"\x16\x03..."`). Unparseable
@@ -81,8 +87,9 @@
    * `Referrer` → referrer_host, referrer_url, channel, search_engine, keyword;
    * `Path` → clean path (query stripped except UTM), file_type, is_static,
      is_download, utm_source/medium/campaign;
-   * `GeoIp` → ISO country (and city when a city db is installed), via a pure
-     PHP MaxMind DB (`.mmdb`) reader; returns `null` without a database.
+   * `GeoIp` → ISO country (and city when a city db is installed), via the
+     `maxminddb` crate (MaxMind DB `.mmdb` files); returns `null` without a
+     database.
 5. **Sessionizer** turns hits into visits (see METRICS.md): visitor hash =
    `substr(sha256(daily_salt . ip . ua), 0, 16)`; a new visit starts when
    the visitor has no open visit or the gap since its last hit is ≥ 30 min.
@@ -92,9 +99,9 @@
    then, closed visits are copied to `visits`).
 6. **DomainStore** accumulates all counters in memory during a run and flushes
    them in a single transaction per log file (batched `INSERT … ON CONFLICT DO
-   UPDATE`), so a 1 M-line log costs about half a minute and the DB is locked for
-   milliseconds at a time. Measured ≈ 30 000 lines/s, 26 MiB peak memory on the
-   development machine (target ≥ 20 000 lines/s).
+   UPDATE`), so the DB is locked for milliseconds at a time. Measured ≈ 150 000
+   lines per second of CPU time and 28 MiB peak RSS on the development machine
+   (`tests/engine_perf.rs`, release build; 0.1.0 in PHP: ≈ 30 000 lines/s).
 7. **Rollup** (nightly 02:10): closes stale visits, caps high-cardinality
    dimensions per day to `max_rows_per_dim` (rest folded into `(other)`),
    purges raw tables older than `raw_retention_days`, prunes `visitor_day`
@@ -108,8 +115,8 @@
   skips users whose lock is held.
 * Domain DBs use `journal_mode=DELETE` (not WAL) so that the account can read
   them with **only read permission on the file** (WAL needs a writable `-shm`).
-  `busy_timeout=5000` on both sides. The dashboard opens with
-  `PDO::SQLITE_ATTR_OPEN_FLAGS => PDO::SQLITE_OPEN_READONLY`.
+  `busy_timeout=5000` on both sides. The dashboard opens them with
+  `SQLITE_OPEN_READ_ONLY`.
 
 ## Paths
 
@@ -163,9 +170,10 @@ server run on a machine without cPanel (see DEVELOPMENT.md).
   }
 }
 ```
-`timezone: null` means the server's `date_default_timezone_get()`. Values the
+`timezone: null` means the system timezone (`TZ`, then `/etc/localtime`). Values the
 WHM UI can edit are stored in `registry.settings` and override the file, so the
-file is only touched by the installer.
+file is only touched by the installer. `php_bin` is obsolete since 0.2.0: the key
+is accepted and ignored (a warning is logged once).
 
 `max_open_visits` (engine-only, file only) caps the visits a domain keeps open
 in memory during a run. Beyond it the visits idle the longest are closed early,
@@ -211,9 +219,9 @@ are closed in batches instead of being loaded. 50 000 open visits take roughly
   `127.0.0.1:PORT` / `localhost:PORT`.
 * Every log message is sanitised (control characters replaced, length
   capped): file names and JSON keys come from accounts.
-* MaxMind DB files are decoded with a per-record budget (20 000 values),
-  pointer-to-pointer is rejected, and the metadata is validated before the
-  search tree is used. `geoip-update` streams to a temporary file, caps the
+* MaxMind DB files are decoded by the `maxminddb` crate, which validates the
+  metadata and bounds the decoding of hostile files (pointer chains, fan-out);
+  a record of an unexpected shape yields no country. `geoip-update` streams to a temporary file, caps the
   download at 64 MiB and follows at most one redirect, to https only.
 * `admin.run` refuses a job whose type and scope is already running and more
   than 3 running jobs (409); it returns the job id only.

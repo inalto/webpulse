@@ -4,7 +4,7 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-10-16
 
 ### Rewritten in Rust
 
@@ -32,10 +32,19 @@ database without migration and the other way round, so an update can be rolled b
   checksum** and installs `bin/webpulse` (0755, root). `--ref` now means a release tag; `main` means the
   latest release.
 - Faster and lighter: no interpreter start-up, no `memory_limit` or `max_execution_time`.
-- Continuous integration runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --release`, the
-  packaging tests (`php tests/run.php pkg_`), the parity harness and shellcheck.
-- `Makefile`: `build`, `test` (cargo + packaging + parity), `lint`, `fixtures`, `serve`, `serve-admin`, `dist`,
+- Continuous integration runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --release` (which
+  includes the packaging tests), the parity harness and shellcheck.
+- `Makefile`: `build`, `test` (`cargo test` + parity), `lint`, `fixtures`, `serve`, `serve-admin`, `dist`,
   `release`, `geoip-fixture`.
+- Every test is a Rust integration test (`cargo test`), the packaging tests included: `tests/pkg_static.rs`,
+  `pkg_hooks.rs`, `pkg_installer.rs`, `pkg_frontends.rs` and `pkg_dist.rs` replace `tests/run.php` and
+  `tests/cases/pkg_*.php`. PHP is needed only to run the cPanel shims under test (skipped without `php`) and by
+  the parity harness, which checks out the 0.1.0 release.
+
+### Fixed
+- `scripts/build_release.sh` and `scripts/build_dist.sh` could reject a complete archive ("... is missing from
+  the archive") on a busy machine: `printf | grep -q` under `pipefail` failed when `grep` exited first. The
+  installer's checks of cPanel tool output had the same pattern.
 
 ### Added
 - `webpulse cgi (--principal user:NAME | --whm) (--api | --page) [--embedded] [--api-url URL]`, the CGI entry
@@ -54,8 +63,12 @@ database without migration and the other way round, so an update can be rolled b
   request-body piping, WHM shim `exec` arguments, release tarball layout.
 
 ### Removed
-- The PHP implementation (`lib/`, the PHP `bin/webpulse`, the PHP test suites) once the parity harness passes;
-  `whm/lib/Edge.php`, `cpanel/webpulse/lib/bootstrap.php`, the installer's PHP detection and `wp_json_patch`.
+- **The PHP implementation**: `lib/` (the whole `WebPulse\` library), the PHP launcher `bin/webpulse`, the PHP
+  test runner and suites (`tests/run.php`, `tests/cases/`, `tests/support/`) and `tests/gen_logs.php` (replaced
+  by `webpulse dev gen-logs`). The only PHP left is what cPanel requires, the two LiveAPI shims
+  (`cpanel/webpulse/{index,api}.live.php` and `cpanel/webpulse/lib/{LiveApiUser,CgiBridge}.php`), plus the
+  parity driver `tests/parity/php_api.php`, which drives the 0.1.0 release checked out from tag `v0.1.0`.
+- `whm/lib/Edge.php`, `cpanel/webpulse/lib/bootstrap.php`, the installer's PHP detection and `wp_json_patch`.
 
 ## [0.1.0] - 2026-10-16
 
@@ -98,5 +111,5 @@ First public version.
   resellers no longer read global settings; log messages are sanitised; `\z` anchors in name validation and a
   single account-name rule.
 
-[0.2.0]: https://github.com/inalto/webpulse/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/inalto/webpulse/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/inalto/webpulse/releases/tag/v0.1.0

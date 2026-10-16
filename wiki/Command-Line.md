@@ -20,7 +20,7 @@ Accepted by every command, anywhere on the line.
 | `--quiet`, `-q` | Suppress informational output. |
 | `--json` | Print the result as JSON. |
 | `--help`, `-h` | Show the help of the command. |
-| `--version` | Print the version (`webpulse 0.1.0`). |
+| `--version` | Print the version (`webpulse 0.2.0`). |
 
 ## Exit codes
 

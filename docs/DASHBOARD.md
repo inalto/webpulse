@@ -3,9 +3,10 @@
 The same single-page app (vanilla JS, inline SVG charts, inline CSS, ≈ 120 KB
 unminified, no external requests, light/dark via `prefers-color-scheme` with a
 manual toggle) is served to cPanel users, WHM admins and the dev server. It is
-rendered by `WebPulse\Http\Page::render(Principal, PageOptions)` as one HTML
-document with `<script>` and `<style>` inlined, so it works wherever cpsrvd
-serves PHP without caring about static-asset paths. The page receives a JSON
+rendered by the binary (`http::page::render(&Ctx, &Principal, &PageOptions)`,
+`webpulse cgi --page`) as one HTML document with `<script>` and `<style>`
+inlined (`ui/*.js` and `ui/app.css` are embedded in the binary), so it works
+behind the cPanel shim and the WHM CGI without caring about static-asset paths. The page receives a JSON
 bootstrap (`window.WEBPULSE = {apiUrl, principal, domains, defaults, version}`).
 
 Design principles (from Plausible's simplicity, Matomo's depth, GoAccess'

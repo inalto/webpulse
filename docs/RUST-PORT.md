@@ -48,7 +48,7 @@ cpanel/webpulse/*.live.php     R3: thin shims → exec binary
 whm/cgi/*.cgi                  R3: bash shims → exec binary
 install.sh, installer/lib.sh   R3: download release binary per arch, fallback cargo build
 .github/workflows/{ci,release}.yml   R3
-tests/                         Rust integration tests (tests/*.rs) + tests/parity/ + legacy pkg tests
+tests/                         Rust integration tests (tests/*.rs, packaging: tests/pkg_*.rs) + tests/parity/
 ```
 
 ## Compatibility contract
@@ -147,16 +147,55 @@ Intentional differences are listed at the end of this file (none expected).
   registry through `engine::registry::Registry` — until R1 lands those, R2
   tests seed databases from the DDL in `docs/DATA-MODEL.md` directly.
 * **R3 — packaging** (`install.sh`, `installer/**`, `cpanel/**`, `whm/**`,
-  `hooks/**`, `.github/**`, `Makefile`, `scripts/**`, `tests/cases/pkg_*.php`,
-  `tests/run.php`, docs and wiki pages touched by the change, `CHANGELOG.md`).
+  `hooks/**`, `.github/**`, `Makefile`, `scripts/**`, the packaging tests
+  (then `tests/cases/pkg_*.php` + `tests/run.php`, now `tests/pkg_*.rs`), docs
+  and wiki pages touched by the change, `CHANGELOG.md`).
 
-## Removal of the PHP implementation
+## Status (0.2.0)
 
-When the parity harness passes: delete `lib/`, `bin/webpulse` (PHP),
-`tests/cases/{engine,ui,sec}_*.php`, `tests/support/*` except what the pkg
-tests need, `tests/gen_logs.php`; keep `tests/run.php` + `tests/cases/pkg_*.php`
-(they test shell scripts and shims and need PHP only on the dev machine/CI).
-Version 0.2.0.
+* **Parity.** `tests/parity/run.sh` against tag `v0.1.0` (seeded logs, the
+  same `WEBPULSE_NOW`): the domain databases and the registry are identical
+  row for row (25 873 rows in 3 domain databases + registry), the CLI output
+  is identical for 27/27 commands, and 261/261 API responses are identical
+  after `jq -S` (252 of them byte for byte; the other 9 differ only in the
+  database file sizes, `db_bytes`/`data_bytes`, see "Database file sizes"
+  below). The product version that
+  `ping` and `admin.overview` report (0.1.0 vs 0.2.0) is blanked before the
+  comparison. Remaining differences are listed below.
+* **Throughput.** `tests/engine_perf.rs` (200 000 generated lines, one
+  `collect`, release build, development machine): about 150 000 lines per
+  second of CPU time (1.3 s CPU, 1.5 s wall) with a peak RSS of 28 MiB, the
+  whole process included. 0.1.0 read about 30 000 lines/s with 26 MiB of PHP
+  heap (`memory_get_peak_usage`), so the collector is about 5× faster; the
+  test fails below 50 000 lines/s.
+* **Tests.** `cargo test --release` runs everything: unit tests, the engine
+  and HTTP integration tests and the packaging tests.
+
+## Removal of the PHP implementation (done)
+
+Done in 0.2.0, after the parity harness passed: `lib/`, the PHP launcher
+`bin/webpulse`, every PHP test (`tests/cases/*.php`, the runner
+`tests/run.php`, `tests/support/*`) and `tests/gen_logs.php` were deleted. The
+71 packaging tests that `tests/run.php` ran were ported to Rust integration
+tests with the same coverage: `tests/pkg_static.rs` (15), `tests/pkg_hooks.rs`
+(9), `tests/pkg_installer.rs` (26), `tests/pkg_frontends.rs` (18) and
+`tests/pkg_dist.rs` (3), with shared helpers in `tests/pkg_common/` (temporary
+sandboxes below `tests/tmp/`, stub cPanel tools that log their invocations, a
+stub `webpulse`, process runner). `tests/config_default.rs` checks that
+`etc/config.json.default`, which the release tarball ships and the installer
+seeds from, matches the binary's defaults.
+
+PHP left in the repository, on purpose:
+
+* `cpanel/webpulse/index.live.php`, `api.live.php` and
+  `cpanel/webpulse/lib/{LiveApiUser,CgiBridge}.php`: cPanel requires LiveAPI
+  pages to be PHP (or Perl); on a server they run on cPanel's own PHP.
+  `tests/pkg_frontends.rs` runs them with the `php` CLI and a stub `CPANEL`
+  class (skipped when `php` is missing).
+* `tests/parity/php_api.php`: the parity harness's driver of the 0.1.0 API,
+  which runs the PHP code of the `v0.1.0` checkout in `tests/tmp/legacy`.
+  `tests/engine_parser.rs` and `tests/engine_gen_logs.rs` also compare with
+  that checkout when it exists.
 
 ## Intentional differences from 0.1.0
 

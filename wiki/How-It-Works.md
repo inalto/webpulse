@@ -111,10 +111,10 @@ and so on, not with traffic.
 
 ## Performance
 
-The 0.1.0 PHP engine read about **30 000 log lines per second** in **26 MiB** on the development machine
-with generated logs. The Rust engine is designed to be several times faster and lighter (no interpreter,
-no `memory_limit` or `max_execution_time`); the numbers are to be re-measured on the release build. Real
-servers vary with disk speed and log content. Because of the checkpoints, the routine 5-minute run only
+On the development machine, with generated logs, the release build reads about **150 000 log lines per
+second** of CPU time with a peak of **28 MiB** for the whole process (200 000 lines in 1.5 seconds). The
+0.1.0 PHP engine read about 30 000 lines per second, so 0.2.0 is about five times faster, with no
+`memory_limit` or `max_execution_time` to tune. Real servers vary with disk speed and log content. Because of the checkpoints, the routine 5-minute run only
 reads the lines written since the previous one.
 
 Aggregated reports grow with the number of distinct values (pages, referrers, countries), not with

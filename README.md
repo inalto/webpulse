@@ -30,8 +30,9 @@ administrator gets a WHM plugin to switch collection on and off per account or d
   pages with bounce rate, 404s with their referrers, 5xx errors, bandwidth by file type, downloads,
   crawler share (AI crawlers highlighted) and a visits log.
 - **Small and fast.** One static binary of a few megabytes, no interpreter, no `memory_limit` or
-  `max_execution_time` surprises. The 0.1.0 PHP engine read about 30 000 log lines per second in
-  26 MiB; the Rust rewrite exists to do that several times faster (see [How it works](#how-it-works)).
+  `max_execution_time` surprises. The collector reads about 150 000 log lines per second of CPU time
+  with a peak of 28 MiB on the development machine, about 5× the 30 000 lines/s of the 0.1.0 PHP
+  engine (see [How it works](#how-it-works)).
 - **Light and dark theme**, works on a phone.
 
 ![WHM server view](docs/screenshots/server-1280-dark.png)
@@ -337,17 +338,17 @@ Wiki: <https://github.com/inalto/webpulse/wiki>
 | [docs/INSTALL.md](docs/INSTALL.md) | Installation, manual installation, building from source, release layout, update, uninstall, troubleshooting |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Cargo workflow, make targets, tests, parity harness, releases |
 | [docs/RUST-PORT.md](docs/RUST-PORT.md) | The 0.2.0 rewrite in Rust: layout, compatibility contract, `webpulse cgi` |
-| [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) | Work packages and contracts of the first implementation |
+| [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) | Work packages and contracts of the first (0.1.0, PHP) implementation; historical |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes |
 
 ## Contributing and development
 
-Nothing here needs cPanel. You need a Rust toolchain (stable); PHP is only used to run the packaging
-tests and the parity harness.
+Nothing here needs cPanel. You need a Rust toolchain (stable). PHP is optional: the tests run the two
+cPanel shims with it (skipped without it), and the parity harness compares with the 0.1.0 PHP release.
 
 ```bash
 make build          # cargo build --release  ->  target/release/webpulse
-make test           # cargo test, the packaging tests (php tests/run.php pkg_) and the parity harness
+make test           # cargo test (engine, web and packaging tests) and the parity harness
 make lint           # cargo fmt --check, clippy -D warnings, shellcheck
 make serve          # collect sample logs and serve the dashboard on 127.0.0.1:8099 as account "alice"
 make serve-admin    # same, with the WHM administrator view
@@ -357,7 +358,7 @@ make release        # binary tarball dist/webpulse-<version>-<target>.tar.gz (+ 
 
 `make serve` prints the URL to open; it contains a random token the dev server requires.
 Read [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) first. CI runs `cargo fmt --check`,
-`cargo clippy -D warnings`, `cargo test --release`, the packaging tests, the parity harness and
+`cargo clippy -D warnings`, `cargo test --release` (packaging tests included), the parity harness and
 shellcheck; pushing a `v*` tag builds the static x86_64 and aarch64 binaries and publishes the release.
 
 ## License

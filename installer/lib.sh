@@ -128,7 +128,7 @@ wp_run_idem() {
     local desc=$1 rc=0
     shift
     WP_OUT=$("$@" 2>&1) || rc=$?
-    if [ "$rc" -ne 0 ] && printf '%s' "$WP_OUT" | grep -qi 'already'; then
+    if [ "$rc" -ne 0 ] && grep -qi 'already' <<<"$WP_OUT"; then
         wp_info "$desc: already in place"
         return 0
     fi
@@ -496,7 +496,7 @@ wp_install_whm_plugin() {
     wp_run_idem "register_appconfig" "$REGISTER_APPCONFIG" "$INSTALL_LINK/whm/webpulse.conf"
     wp_ok "AppConfig registered (WHM > Plugins > WebPulse Analytics)"
     # the docs do not say when a restart is needed: only do it when the tool asks for it
-    if printf '%s' "$WP_OUT" | grep -qi 'restart'; then
+    if grep -qi 'restart' <<<"$WP_OUT"; then
         wp_restart_cpsrvd
     fi
 }
@@ -528,7 +528,7 @@ wp_register_hooks() {
         fi
         rc=0
         WP_OUT=$("$MANAGE_HOOKS" add script "$path" --manual --category Stats --event "$event" --stage pre 2>&1) || rc=$?
-        if [ "$rc" -ne 0 ] && ! printf '%s' "$WP_OUT" | grep -qi 'already'; then
+        if [ "$rc" -ne 0 ] && ! grep -qi 'already' <<<"$WP_OUT"; then
             wp_err "Step failed: register Stats::$event hook"
             wp_err "Command: $MANAGE_HOOKS add script $path --manual --category Stats --event $event --stage pre"
             wp_err "Exit status: $rc"

@@ -37,7 +37,7 @@ git archive --format=tar --prefix="webpulse-$version/" "$ref" | gzip -9n >"$out"
 # sanity: the installer needs these (a real checkout also has Cargo.toml and src/)
 listing=$(tar -tzf "$out")
 for required in "webpulse-$version/install.sh" "webpulse-$version/installer/lib.sh" "webpulse-$version/VERSION"; do
-    if ! printf '%s\n' "$listing" | grep -qxF "$required"; then
+    if ! grep -qxF "$required" <<<"$listing"; then
         echo "build_dist: $required is missing from the archive (commit it first)" >&2
         rm -f "$out"
         exit 1

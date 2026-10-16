@@ -2,16 +2,18 @@
 
 Nothing here needs cPanel. The engine, the API and the dashboard run against a fake server root
 under `tests/fixtures/fakeroot/`. WebPulse is a single Rust crate (see `docs/RUST-PORT.md` for the
-module layout); PHP survives only in the two cPanel shims and as the runner of the packaging tests
-and the parity harness.
+module layout). The only PHP in the repository is what cPanel requires, the two LiveAPI shims
+(`cpanel/webpulse/*.live.php` and their `lib/`), plus `tests/parity/php_api.php`, which drives the 0.1.0
+release in the parity harness. Every test is a Rust integration test run by `cargo test`.
 
-You need a stable Rust toolchain (`rustup`), a C compiler (bundled SQLite) and, for the packaging
-tests, `php` >= 8.1 with `pdo_sqlite`, `sqlite3`, `jq` and `shellcheck` (all optional: the
-`make` targets skip what is missing).
+You need a stable Rust toolchain (`rustup`) and a C compiler (bundled SQLite). Optional: `php` (the
+shim tests run the cPanel shims with it and `php -l` checks them; they are skipped without it), `php`
+>= 8.1 with `pdo_sqlite` plus `sqlite3` and `jq` for the parity harness, `shellcheck`, `git` and
+`python3` (the tests and `make` targets skip what is missing).
 
 ```bash
 make build         # cargo build --release          -> target/release/webpulse
-make test          # cargo test --release + php tests/run.php pkg_ + tests/parity/run.sh
+make test          # cargo test --release (engine, web, packaging) + tests/parity/run.sh
 make lint          # cargo fmt --check, cargo clippy --all-targets -D warnings, shellcheck, php -l of the shims
 make fixtures      # fake server root with 45 days of generated logs in tests/tmp/dev (seed 42)
 make serve         # dev dashboard on http://127.0.0.1:8099/?token=… as account "alice" (URL printed)
@@ -34,7 +36,7 @@ hooks/                       Standardized-hook scripts (bash)
 etc/                         config.json.default, cron file
 install.sh, uninstall.sh, installer/lib.sh    installer (bash)
 scripts/                     build_release.sh, build_dist.sh, devenv.sh, geoip_fixture.sh, publish_wiki.sh, make_icons.py
-tests/                       Rust integration tests (tests/*.rs), tests/parity/, packaging tests (tests/cases/pkg_*.php, tests/run.php), fixtures/
+tests/                       Rust integration tests (tests/*.rs: engine_*, http_*, pkg_*, config_default), tests/parity/, fixtures/
 docs/                        this documentation
 ```
 
@@ -78,26 +80,43 @@ cookie or an `X-WebPulse-Dev-Token` header, requests whose `Host` is not `127.0.
 
 ## Tests
 
-* **Rust** (`cargo test --release`): unit tests in `src/**`, integration tests in `tests/*.rs`
-  (engine, HTTP/API, CLI).
-* **Packaging tests** (`php tests/run.php pkg_`): the installer end to end in a temporary prefix with a
-  fake cPanel root, the PHP and bash shims, the hooks, the release tarballs and static checks. PHP is
-  only the runner here (`tests/run.php` is a small dependency-free TAP-like runner, every
-  `tests/cases/pkg_*.php` returns a `name => callable` array and an assertion throws). They use a
-  stub binary in the release layout, a fake `curl`/`uname`/`cargo` and `file://` URLs; nothing
-  outside `tests/tmp` is touched and no network is used. `pkg_installer` additionally installs the real
-  `target/release/webpulse` when it exists. Run a subset with `php tests/run.php pkg_hooks` or a
-  substring of a test name.
-* **Parity harness** (`tests/parity/run.sh`, needs `php` >= 8.1): checks out tag `v0.1.0`, runs the PHP
-  engine and the Rust binary on the same generated logs and compares the tables, the counters and the
-  JSON of every API action (see `docs/RUST-PORT.md`). `make test-parity` builds first and skips quietly when
-  `php` or the script is missing.
+Everything runs with `cargo test --release` (or `cargo test`); a test that needs a missing tool prints
+`SKIP: …` and passes.
+
+* **Engine, web, CLI**: unit tests in `src/**`, integration tests `tests/engine_*.rs` (helpers in
+  `tests/common/`, a fake server root) and `tests/http_*.rs` (helpers in `tests/http_common/`).
+  `engine_parser` and `engine_gen_logs` also compare with the 0.1.0 PHP code when `php` and the
+  `v0.1.0` checkout of the parity harness (`tests/tmp/legacy`) exist.
+* **Packaging** (`tests/pkg_*.rs`, helpers in `tests/pkg_common/`): `pkg_static` (bash -n, shellcheck,
+  `php -l` of the shims, `install.json` and `webpulse.conf` against CPANEL-INTEGRATION.md, icons, cron
+  file, Makefile, workflows), `pkg_hooks` (`--describe`, the RunUser flag, RunAll), `pkg_installer`
+  (install, update, uninstall and purge end to end in a temporary prefix with a fake cPanel root whose
+  tools are logging stubs, checksums, release resolution with a fake `curl`/`uname`, `--binary`,
+  `--build` with a fake `cargo`, and an install of the real binary under test), `pkg_frontends` (the
+  shims) and `pkg_dist` (`build_dist.sh`, `build_release.sh`). They use a stub binary in the release
+  layout and `file://` URLs; nothing outside `tests/tmp` is touched and no network is used. Each test
+  works in its own directory below `tests/tmp/`, removed at the end (`WEBPULSE_KEEP_TMP=1` keeps it).
+  Run one file with `cargo test --test pkg_installer`, or add a substring of a test name.
+* **Shim tests and PHP**: `pkg_frontends` runs `cpanel/webpulse/api.live.php` and `index.live.php`
+  with the `php` CLI. A stub `CPANEL` class (what `/usr/local/cpanel/php/cpanel.php` provides on a
+  server) is loaded with `-d auto_prepend_file`, `WEBPULSE_BIN` points at a stub binary that records
+  its arguments, environment and stdin and prints a canned CGI response, and the test checks the
+  arguments, the forwarded CGI variables, the request body, the status and headers (through `php -S`
+  for a real HTTP request) and the body. `LiveApiUser` and `CgiBridge` are exercised with small PHP
+  snippets. The WHM CGIs are bash and run without PHP. Without `php` these tests are skipped.
+* **Configuration**: `config_default` checks that `etc/config.json.default` equals the fallback
+  `webpulse setup` writes and agrees with the built-in defaults (`src/config.rs`).
+* **Parity harness** (`tests/parity/run.sh`, needs `php` >= 8.1): checks out tag `v0.1.0` into
+  `tests/tmp/legacy` (a git worktree), runs the 0.1.0 PHP engine and the Rust binary on the same
+  generated logs and compares the tables, the counters and the JSON of every API action (see
+  `docs/RUST-PORT.md`). `make test-parity` builds first and skips quietly when `php` or the script is
+  missing.
 
 ## Continuous integration and releases
 
 `.github/workflows/ci.yml` (push to `main`/`rust`, pull requests): `cargo fmt --check`,
-`cargo clippy --all-targets -- -D warnings`, `cargo test --release`, `php tests/run.php pkg_`
-(PHP 8.3, `sqlite3`), the parity harness as a separate job, and shellcheck.
+`cargo clippy --all-targets -- -D warnings`, `cargo test --release` (with PHP 8.3 installed so the
+shim tests run), the parity harness as a separate job, and shellcheck.
 
 `.github/workflows/release.yml` runs on tags `v*` (the tag must equal `VERSION`, which must equal the
 `version` in `Cargo.toml`): it builds `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`

@@ -1,5 +1,12 @@
 # Implementation plan & contracts
 
+> **Historical document.** This plan describes how the 0.1.0 **PHP** implementation
+> was built (`lib/WebPulse/*`, the PHP `bin/webpulse`, `tests/cases/*.php`). That
+> implementation was replaced in 0.2.0 by the Rust port described in
+> [RUST-PORT.md](RUST-PORT.md) and removed from the repository; the paths and class
+> names below no longer exist (the code is in the `v0.1.0` tag). It is kept as the
+> record of the original design decisions and contracts, which the Rust port keeps.
+
 Three work packages are implemented in parallel by independent agents. Each
 package owns a disjoint set of paths (listed below) and must not create or
 edit files outside of them. Cross-package calls go through the contracts in

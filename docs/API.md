@@ -1,12 +1,12 @@
 # JSON API
 
-One PHP entry point, `WebPulse\Http\Api::dispatch(Request $req, Principal $p): Response`,
-is wrapped by three thin front-ends:
+One entry point in the binary, `http::api::dispatch(&Ctx, &Request, &Principal) -> Response`
+(`src/http/api.rs`), is reached through three thin front-ends:
 
 | Front-end                                  | URL (relative to the page)      | Principal                 |
 |--------------------------------------------|---------------------------------|---------------------------|
-| cPanel plugin `cpanel/webpulse/api.live.php` | `api.live.php?a=…`             | `user` (from LiveAPI)     |
-| WHM plugin `whm/cgi/api.cgi`               | `api.cgi?a=…`                   | `admin` (root) or `reseller` |
+| cPanel plugin `cpanel/webpulse/api.live.php` (PHP shim → `webpulse cgi --principal user:U --api`) | `api.live.php?a=…` | `user` (from LiveAPI) |
+| WHM plugin `whm/cgi/api.cgi` (bash → `webpulse cgi --whm --api`) | `api.cgi?a=…`        | `admin` (root) or `reseller` |
 | Dev server `webpulse serve`                | `/api?a=…`                      | from `--user` / `--admin` |
 
 All responses are `application/json; charset=utf-8`, shape
@@ -158,17 +158,22 @@ so the Settings tab is testable); admin and reseller get 403, an empty body 400.
 
 ## Principal
 
-```php
-final class Principal {
-    public const USER = 'user'; public const ADMIN = 'admin'; public const RESELLER = 'reseller';
-    public function __construct(public readonly string $type, public readonly string $name,
-                                /** @var string[]|null */ public readonly ?array $ownedUsers = null) {}
-    public function isAdmin(): bool;            // type === ADMIN
-    public function canSeeUser(string $user): bool;
-    public function canMutate(): bool;          // admin, reseller (scoped), user (own settings only)
+```rust
+// src/http/principal.rs
+pub enum Kind { User, Admin, Reseller }
+pub struct Principal {
+    pub kind: Kind,
+    pub name: String,                      // account / reseller name, "root" for the admin
+    pub owned_users: Option<Vec<String>>,  // reseller's accounts (None = look them up in the registry)
+}
+impl Principal {
+    pub fn is_admin(&self) -> bool;
+    pub fn can_see_user(&self, user: &str) -> bool;
 }
 ```
-`DomainResolver::visibleDomains(Principal, Registry, Paths): DomainRef[]`
+Mutations are allowed to the admin, to a reseller within its accounts and to an
+account for its own settings only.
+`http::resolver::visible_domains(&Principal, Option<&Registry>, &Paths) -> Vec<DomainRef>`
 is the only place that decides visibility: for `user` it lists
 `<data_dir>/<user>/*.db` (plus Registry rows without data for the "no data
 yet" state); for `reseller` all accounts with `owner = name`; for `admin` all.

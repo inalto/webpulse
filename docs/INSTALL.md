@@ -298,7 +298,7 @@ asks for it. Re-installing later picks up the kept data.
 **Moving the data or testing the installer**
 * `WEBPULSE_PREFIX`, `WEBPULSE_FAKE_CPANEL=1`, `WEBPULSE_CPANEL_ROOT`, `WEBPULSE_ETC`, `WEBPULSE_VAR`,
   `WEBPULSE_CRON_DIR`, `WEBPULSE_APPS_DIR` redirect every path so the installer can be exercised in a
-  temporary directory without privileges (this is how `tests/cases/pkg_installer.php` works).
+  temporary directory without privileges (this is how `tests/pkg_installer.rs` works).
   `WEBPULSE_DOWNLOAD_URL` (release tarball; its `.sha256` is fetched next to it, or give
   `WEBPULSE_DOWNLOAD_SHA256`), `WEBPULSE_SOURCE_URL`, `WEBPULSE_TARGET`, `WEBPULSE_CARGO`,
   `WEBPULSE_BUILD=1` and `WEBPULSE_BINARY=<file>` steer where the binary comes from.

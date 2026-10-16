@@ -1,16 +1,14 @@
 //! `webpulse dev gen-logs` must produce byte-identical logs (and the same summary)
 //! as tests/gen_logs.php of 0.1.0 for the same options (checked when php and the
-//! PHP generator are available).
+//! v0.1.0 checkout that tests/parity/run.sh creates are available).
 
 mod common;
 
-fn have_php_generator() -> bool {
-    std::process::Command::new("php")
-        .arg("-v")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-        && common::repo().join("tests/gen_logs.php").is_file()
+/// `tests/gen_logs.php` of the 0.1.0 checkout, when php and the checkout exist.
+fn php_generator() -> Option<std::path::PathBuf> {
+    common::legacy_php()
+        .map(|d| d.join("tests/gen_logs.php"))
+        .filter(|f| f.is_file())
 }
 
 fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -35,10 +33,10 @@ fn gunzip(p: &std::path::Path) -> Vec<u8> {
 
 #[test]
 fn identical_to_the_php_generator() {
-    if !have_php_generator() {
-        eprintln!("php or tests/gen_logs.php not available: skipped");
+    let Some(generator) = php_generator() else {
+        eprintln!("php or the 0.1.0 checkout (tests/tmp/legacy) not available: skipped");
         return;
-    }
+    };
     let base = common::repo().join("tests/tmp/rs-genlogs");
     common::rm(&base);
     for (seed, days, lines, extra) in [
@@ -69,7 +67,7 @@ fn identical_to_the_php_generator() {
         .to_vec();
         args.extend(extra.iter().map(|s| s.to_string()));
         let php = std::process::Command::new("php")
-            .arg(common::repo().join("tests/gen_logs.php"))
+            .arg(&generator)
             .args(&args)
             .arg("--out")
             .arg(&a)

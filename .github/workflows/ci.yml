@@ -27,7 +27,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
   test:
-    name: cargo test + packaging tests
+    name: cargo test (engine, web, packaging)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,14 +35,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # PHP is only the runner of the packaging tests (installer, shims, hooks) and of the parity harness
+      # PHP runs only the cPanel LiveAPI shims under test (tests/pkg_frontends.rs, php -l in
+      # tests/pkg_static.rs); without it those tests are skipped. The engine needs no PHP.
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: pdo_sqlite, sqlite3, json, mbstring, zlib, posix
+          extensions: json, posix
           coverage: none
-          ini-values: memory_limit=512M
 
       - name: System tools
         run: sudo apt-get install -y --no-install-recommends sqlite3 jq shellcheck
@@ -50,11 +50,8 @@ jobs:
       - name: cargo test
         run: cargo test --release
 
-      - name: Packaging tests (installer, shims, hooks)
-        run: php tests/run.php pkg_
-
   parity:
-    name: parity with the 0.1.0 PHP engine
+    name: parity with the 0.1.0 PHP release
     runs-on: ubuntu-latest
     needs: [test]
     steps:
@@ -75,12 +72,7 @@ jobs:
       - name: Build
         run: cargo build --release
       - name: Parity harness
-        run: |
-          if [ -x tests/parity/run.sh ]; then
-            tests/parity/run.sh
-          else
-            echo "tests/parity/run.sh is not present yet, nothing to compare"
-          fi
+        run: tests/parity/run.sh # uses target/release/webpulse
 
   shellcheck:
     name: shellcheck
