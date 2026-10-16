@@ -74,7 +74,9 @@ wp_init_env() {
     CPANEL_PHP="$CPANEL_ROOT/3rdparty/bin/php"
     CPANEL_PERL="$CPANEL_ROOT/3rdparty/bin/perl"
 
-    HOOK_SCRIPTS=("RunAll|stats_runall_pre.sh" "RunUser|stats_runuser_pre.sh")
+    # Category|Event|stage|script
+    HOOK_SCRIPTS=("Stats|RunAll|pre|stats_runall_pre.sh" "Stats|RunUser|pre|stats_runuser_pre.sh" "System|upcp|post|upcp_post.sh")
+    MERIDIAN_REGISTRY="$THEME_ROOT/meridian/_assets/_registry.js"
     DEFAULT_VAR=/var/webpulse
 
     WP_OUT=''
@@ -429,8 +431,12 @@ wp_copy_theme_files() {
     stage="$base/.webpulse.new.$$"
     wp_safe_rm_rf "$stage"
     mkdir -p "$stage"
-    # thin PHP shims (index.live.php, api.live.php, lib/*.php) + icon; no PHP library any more
+    # thin PHP shims (index/api/frame.live.php, lib/*.php) + icon; no PHP library any more
     cp -a "$rel/cpanel/webpulse/." "$stage/"
+    # Meridian: hub manifest + Module Federation entry for the side menu
+    if [ "$theme" = meridian ] && [ -d "$rel/cpanel/meridian" ]; then
+        cp -a "$rel/cpanel/meridian/." "$stage/"
+    fi
     cp -a "$rel/VERSION" "$stage/VERSION"
     find "$stage" -type d -exec chmod 755 {} +
     find "$stage" -type f -exec chmod 644 {} +
@@ -518,6 +524,23 @@ wp_install_cpanel_plugin() {
         installed=$((installed + 1))
     done
     [ "$installed" -gt 0 ] || wp_fail "No cPanel theme could be installed"
+    wp_register_meridian_hub
+}
+
+# Meridian's side navigation comes from the hub registry (_assets/_registry.js),
+# not from dynamicui; register our hub there when the theme is present.
+wp_register_meridian_hub() {
+    local hub="$THEME_ROOT/meridian/webpulse"
+    [ -f "$MERIDIAN_REGISTRY" ] && [ -f "$hub/manifest.json" ] || return 0
+    local existed=0
+    grep -q '"slug": *"webpulse"' "$MERIDIAN_REGISTRY" 2>/dev/null && existed=1
+    if wp_try "Meridian hub registration" "$INSTALL_LINK/bin/webpulse" meridian-registry add \
+        --registry "$MERIDIAN_REGISTRY" --manifest "$hub/manifest.json" --entry "$hub/remoteEntry.js" --quiet; then
+        [ "$existed" = 0 ] && [ "$WAS_INSTALLED" = 0 ] && wp_undo wp_try_quiet "$INSTALL_LINK/bin/webpulse" meridian-registry remove --registry "$MERIDIAN_REGISTRY" --quiet
+        wp_ok "Meridian side menu: WebPulse hub registered (re-applied after cPanel updates by the System::upcp hook)"
+    else
+        wp_warn "Could not register the Meridian hub; the plugin stays reachable from Jupiter and the cPanel Metrics group"
+    fi
 }
 
 wp_try_quiet() { "$@" >/dev/null 2>&1 || true; }
@@ -560,26 +583,26 @@ wp_hook_registered() { # path
 wp_register_hooks() {
     wp_head "cPanel hooks (drain logs before cpanellogd)"
     local spec event script path rc
+    local cat stage
     for spec in "${HOOK_SCRIPTS[@]}"; do
-        event=${spec%%|*}
-        script=${spec#*|}
+        IFS='|' read -r cat event stage script <<<"$spec"
         path="$INSTALL_LINK/hooks/$script"
         if wp_hook_registered "$path"; then
-            wp_ok "Stats::$event hook already registered"
+            wp_ok "$cat::$event hook already registered"
             continue
         fi
         rc=0
-        WP_OUT=$("$MANAGE_HOOKS" add script "$path" --manual --category Stats --event "$event" --stage pre 2>&1) || rc=$?
+        WP_OUT=$("$MANAGE_HOOKS" add script "$path" --manual --category "$cat" --event "$event" --stage "$stage" 2>&1) || rc=$?
         if [ "$rc" -ne 0 ] && ! grep -qi 'already' <<<"$WP_OUT"; then
-            wp_err "Step failed: register Stats::$event hook"
-            wp_err "Command: $MANAGE_HOOKS add script $path --manual --category Stats --event $event --stage pre"
+            wp_err "Step failed: register $cat::$event hook"
+            wp_err "Command: $MANAGE_HOOKS add script $path --manual --category $cat --event $event --stage $stage"
             wp_err "Exit status: $rc"
             printf '%s\n' "$WP_OUT" | sed 's/^/    | /' >&2
             wp_rollback
             exit 1
         fi
-        [ "$WAS_INSTALLED" = 0 ] && wp_undo wp_try_quiet "$MANAGE_HOOKS" delete script "$path" --manual --category Stats --event "$event" --stage pre
-        wp_ok "Stats::$event (pre) hook registered"
+        [ "$WAS_INSTALLED" = 0 ] && wp_undo wp_try_quiet "$MANAGE_HOOKS" delete script "$path" --manual --category "$cat" --event "$event" --stage "$stage"
+        wp_ok "$cat::$event ($stage) hook registered"
     done
 
     # flag directory used by the unprivileged Stats::RunUser hook
@@ -772,15 +795,15 @@ wp_uninstall() {
     if [ "$have_cpanel" = 1 ]; then
         wp_head "Hooks"
         if [ -x "$MANAGE_HOOKS" ]; then
+            local cat stage
             for spec in "${HOOK_SCRIPTS[@]}"; do
-                event=${spec%%|*}
-                script=${spec#*|}
+                IFS='|' read -r cat event stage script <<<"$spec"
                 path="$INSTALL_LINK/hooks/$script"
                 if wp_hook_registered "$path"; then
-                    wp_try "Remove Stats::$event hook" "$MANAGE_HOOKS" delete script "$path" --manual --category Stats --event "$event" --stage pre \
-                        && wp_ok "Stats::$event hook removed"
+                    wp_try "Remove $cat::$event hook" "$MANAGE_HOOKS" delete script "$path" --manual --category "$cat" --event "$event" --stage "$stage" \
+                        && wp_ok "$cat::$event hook removed"
                 else
-                    wp_info "Stats::$event hook not registered"
+                    wp_info "$cat::$event hook not registered"
                 fi
             done
         else
@@ -799,6 +822,10 @@ wp_uninstall() {
         wp_ok "CGI scripts and icon removed"
 
         wp_head "cPanel plugin"
+        if [ -f "$MERIDIAN_REGISTRY" ] && [ -x "$INSTALL_LINK/bin/webpulse" ]; then
+            wp_try "Meridian hub removal" "$INSTALL_LINK/bin/webpulse" meridian-registry remove --registry "$MERIDIAN_REGISTRY" --quiet \
+                && wp_ok "Meridian side menu entry removed"
+        fi
         if [ -d "$THEME_ROOT" ]; then
             for d in "$THEME_ROOT"/*/; do
                 [ -d "${d}webpulse" ] || continue

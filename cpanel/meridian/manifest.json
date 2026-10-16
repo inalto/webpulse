@@ -1,0 +1,35 @@
+{
+  "$schema": "../../manifest.schema.json",
+  "contractVersion": "1.0.0",
+  "dependencies": {
+    "optional": {},
+    "required": ["webpulse"]
+  },
+  "displayName": "WebPulse Analytics",
+  "entrypoints": {
+    "mf": "./remoteEntry.js"
+  },
+  "icon": "ri-pulse-line",
+  "id": "net.inalto.webpulse",
+  "loadPriority": "lazy",
+  "nav": {
+    "icon": "ri-pulse-line",
+    "label": "Analytics",
+    "path": "/webpulse",
+    "section": "monitor"
+  },
+  "platforms": ["cpanel"],
+  "searchIndex": [
+    {
+      "href": "#/webpulse",
+      "icon": "ri-pulse-line",
+      "id": "webpulse",
+      "keywords": ["analytics", "statistics", "visitors", "traffic", "pageviews", "logs", "webpulse", "awstats"],
+      "kind": "page",
+      "label": "WebPulse Analytics",
+      "sub": "Visitor statistics generated from your access logs"
+    }
+  ],
+  "slug": "webpulse",
+  "version": "0.2.3"
+}

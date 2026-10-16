@@ -268,7 +268,7 @@ asks for it. Re-installing later picks up the kept data.
   it is absent the registration did not run or failed; if present, log out of cPanel and back in so the
   page is rebuilt. Also check that the files exist: `ls /usr/local/cpanel/base/frontend/jupiter/webpulse/`.
 * Using another theme? Jupiter and Meridian are detected automatically (any theme directory with a `dynamicui.conf`); for anything else install with `--theme <name>` or `--all-themes`.
-* Plugin missing from Meridian's side menu? The entry comes from `/var/cpanel/plugins/webpulse/menu/LeftMenu.yaml` merged into `/var/cpanel/menus/LeftMenu.yaml` by `install_plugin`. Re-run `install.sh --update` (0.2.2+) and check that `grep webpulse /var/cpanel/menus/LeftMenu.yaml` matches.
+* Plugin missing from Meridian's side menu? Meridian lists only *hubs* from `/usr/local/cpanel/base/frontend/meridian/_assets/_registry.js`. WebPulse 0.2.3+ registers its hub there (`webpulse meridian-registry add …`) and re-applies it after cPanel updates through the `System::upcp` hook. Check with `grep -c '"slug": "webpulse"' /usr/local/cpanel/base/frontend/meridian/_assets/_registry.js`, run `install.sh --update` if it is 0, then reload the page (the shell caches the registry per page load). The feature `webpulse` must be enabled for the account.
 * Icon missing in Jupiter's Metrics group? Jupiter compiles every application icon into one sprite SVG and drops `<defs>`, so icons must use solid fills only (no gradients, `<title>`, `<style>` or ids). The shipped icon follows that rule since 0.2.1; after replacing an icon run `/usr/local/cpanel/bin/sprite_generator` or wait for the scheduled rebuild.
 
 **The WHM entry is missing (WHM » Plugins » WebPulse Analytics)**

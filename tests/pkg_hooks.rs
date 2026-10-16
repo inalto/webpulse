@@ -5,6 +5,7 @@ mod pkg_common;
 
 use pkg_common::*;
 use serde_json::{Value, json};
+use std::os::unix::fs::PermissionsExt;
 
 fn hook(name: &str) -> String {
     s(&repo().join("hooks").join(name))
@@ -12,9 +13,10 @@ fn hook(name: &str) -> String {
 
 #[test]
 fn describe_prints_the_registration_json() {
-    for (file, event) in [
-        ("stats_runall_pre.sh", "RunAll"),
-        ("stats_runuser_pre.sh", "RunUser"),
+    for (file, category, event, stage) in [
+        ("stats_runall_pre.sh", "Stats", "RunAll", "pre"),
+        ("stats_runuser_pre.sh", "Stats", "RunUser", "pre"),
+        ("upcp_post.sh", "System", "upcp", "post"),
     ] {
         let path = hook(file);
         let (rc, out) = cmd(&[path.as_str(), "--describe"]).go();
@@ -24,7 +26,7 @@ fn describe_prints_the_registration_json() {
         assert_eq!(list.len(), 1, "one hook described");
         assert_eq!(
             list[0],
-            json!({"category": "Stats", "event": event, "stage": "pre", "hook": path, "exectype": "script"}),
+            json!({"category": category, "event": event, "stage": stage, "hook": path, "exectype": "script"}),
             "{file} describe"
         );
         let keys: Vec<&str> = list[0]
@@ -259,4 +261,73 @@ fn runuser_checks_for_a_symlink_right_before_touch() {
     let i = src.find("[ -L \"$flag\" ] && exit 0").unwrap();
     let j = src.find("touch -- \"$flag\"").unwrap();
     assert!(i < j, "the check precedes touch");
+}
+
+#[test]
+fn upcp_post_hook_reapplies_the_meridian_registry_entry_and_never_fails() {
+    let tmp = TmpDir::new("upcp");
+    let home = tmp.path.join("webpulse");
+    for d in ["hooks", "bin", "cpanel/meridian"] {
+        std::fs::create_dir_all(home.join(d)).unwrap();
+    }
+    std::fs::copy(
+        repo().join("hooks/upcp_post.sh"),
+        home.join("hooks/upcp_post.sh"),
+    )
+    .unwrap();
+    std::fs::copy(
+        repo().join("cpanel/meridian/manifest.json"),
+        home.join("cpanel/meridian/manifest.json"),
+    )
+    .unwrap();
+    std::fs::copy(
+        repo().join("cpanel/meridian/remoteEntry.js"),
+        home.join("cpanel/meridian/remoteEntry.js"),
+    )
+    .unwrap();
+    let log = tmp.path.join("bin.log");
+    script(
+        &home.join("bin/webpulse"),
+        &format!("#!/bin/bash\necho \"$*\" >> '{}'\nexit 0\n", s(&log)),
+    );
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(home.join("bin"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(
+        home.join("bin/webpulse"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let theme_root = tmp.path.join("frontend");
+    std::fs::create_dir_all(theme_root.join("meridian/_assets")).unwrap();
+    std::fs::write(
+        theme_root.join("meridian/_assets/_registry.js"),
+        "window.__MERIDIAN_REGISTRY__ = [];\n",
+    )
+    .unwrap();
+
+    // without the theme nothing happens, exit 0
+    let (rc, _) = cmd(&[&s(&home.join("hooks/upcp_post.sh"))])
+        .env("WEBPULSE_THEME_ROOT", tmp.path.join("nope"))
+        .stdin("{}")
+        .go();
+    assert_eq!(rc, 0);
+    assert!(!log.exists(), "binary not called without the theme");
+
+    let (rc, out) = cmd(&[&s(&home.join("hooks/upcp_post.sh"))])
+        .env("WEBPULSE_THEME_ROOT", &theme_root)
+        .stdin("{\"context\":{\"event\":\"upcp\"}}")
+        .go();
+    assert_eq!(rc, 0, "{out}");
+    let hub = theme_root.join("meridian/webpulse");
+    assert!(
+        hub.join("manifest.json").is_file() && hub.join("remoteEntry.js").is_file(),
+        "hub files refreshed"
+    );
+    let called = read(&log);
+    assert_contains(
+        &called,
+        "meridian-registry add --registry",
+        "registry re-applied",
+    );
+    assert_contains(&called, "manifest.json", "manifest passed");
 }

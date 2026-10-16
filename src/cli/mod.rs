@@ -29,6 +29,7 @@ pub mod dev;
 pub mod domains;
 pub mod geoip_update;
 pub mod hooked;
+pub mod meridian_registry;
 pub mod purge;
 pub mod report;
 pub mod rollup;
@@ -97,6 +98,9 @@ pub enum Command {
     Serve(serve::Args),
     /// CGI entry point used by the cPanel and WHM shims
     Cgi(cgi::Args),
+    /// Add or remove the WebPulse hub in the Meridian side-menu registry
+    #[command(name = "meridian-registry")]
+    MeridianRegistry(meridian_registry::Args),
 }
 
 // ------------------------------------------------------------------ arguments
@@ -572,6 +576,13 @@ const COMMANDS: &[CmdDef] = &[
         handler: Handler::R1(purge::main),
     },
     CmdDef {
+        name: "meridian-registry",
+        summary: meridian_registry::SUMMARY,
+        hidden: false,
+        spec: meridian_registry::SPEC,
+        handler: Handler::R1(meridian_registry::main),
+    },
+    CmdDef {
         name: "report",
         summary: "print the overview or one report of a domain (table or --json)",
         hidden: false,
@@ -620,6 +631,7 @@ pub fn usage_of(name: &str) -> String {
         "geoip-update" => geoip_update::USAGE.to_string(),
         "hooked" => hooked::USAGE.to_string(),
         "purge" => purge::USAGE.to_string(),
+        "meridian-registry" => meridian_registry::USAGE.to_string(),
         "rollup" => rollup::USAGE.to_string(),
         "setup" => setup::USAGE.to_string(),
         "status" => status::USAGE.to_string(),

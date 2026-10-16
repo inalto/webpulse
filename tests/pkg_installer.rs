@@ -306,6 +306,7 @@ fn fresh_install_registers_everything() {
         &format!("{l}/hooks/stats_runall_pre.sh RunAll"),
         "hooks",
     );
+    assert_contains(&hooks, &format!("{l}/hooks/upcp_post.sh upcp"), "hooks");
     assert_contains(
         &hooks,
         &format!("{l}/hooks/stats_runuser_pre.sh RunUser"),
@@ -342,6 +343,9 @@ fn fresh_install_registers_everything() {
         format!(
             "manage_hooks add script {l}/hooks/stats_runuser_pre.sh --manual --category Stats --event RunUser --stage pre"
         ),
+        format!(
+            "manage_hooks add script {l}/hooks/upcp_post.sh --manual --category System --event upcp --stage post"
+        ),
     ] {
         assert!(log.contains(&expected), "{expected}: {}", log.join("|"));
     }
@@ -375,7 +379,7 @@ fn update_is_idempotent_upgrades_via_a_new_release_and_prunes_nothing_needed() {
     let log = p.stub_log();
     assert_eq!(
         count(&log, "manage_hooks add"),
-        2,
+        3,
         "hooks added exactly once each"
     );
     assert_eq!(count(&log, "install_plugin"), 2, "install_plugin re-run");
@@ -401,7 +405,7 @@ fn update_is_idempotent_upgrades_via_a_new_release_and_prunes_nothing_needed() {
     );
     assert_eq!(
         count(&p.stub_log(), "manage_hooks add"),
-        2,
+        3,
         "still no duplicate hooks"
     );
     let stages: Vec<String> = list_tree(&p.releases())
@@ -457,6 +461,12 @@ fn every_theme_with_a_dynamicui_conf_is_installed_by_default() {
     let fe = p.cpanel.join("base/frontend");
     std::fs::create_dir_all(fe.join("meridian")).unwrap();
     std::fs::write(fe.join("meridian/dynamicui.conf"), "[]\n").unwrap();
+    std::fs::create_dir_all(fe.join("meridian/_assets")).unwrap();
+    std::fs::write(
+        fe.join("meridian/_assets/_registry.js"),
+        "window.__MERIDIAN_REGISTRY__ = [];\n",
+    )
+    .unwrap();
     std::fs::create_dir_all(fe.join("paper_lantern")).unwrap(); // no dynamicui.conf: not a theme
     make_source(&p, "0.1.0", None, "stub");
     let (rc, out) = p.installer(&p.src, &["-y"]).go();
@@ -468,6 +478,27 @@ fn every_theme_with_a_dynamicui_conf_is_installed_by_default() {
     }
     assert_missing(&fe.join("paper_lantern/webpulse"));
     assert_missing(&p.state.join("plugin.paper_lantern"));
+    // Meridian hub: manifest + federation entry copied, registry updated through the binary
+    for f in ["manifest.json", "remoteEntry.js", "frame.live.php"] {
+        assert_exists(&fe.join(format!("meridian/webpulse/{f}")));
+    }
+    assert_missing(&fe.join("jupiter/webpulse/manifest.json"));
+    let engine = read(&p.engine_log);
+    assert_contains(
+        &engine,
+        "meridian-registry add --registry",
+        "hub registered",
+    );
+    assert_contains(
+        &engine,
+        &s(&fe.join("meridian/_assets/_registry.js")),
+        "registry path",
+    );
+    assert_contains(
+        &out,
+        "Meridian side menu: WebPulse hub registered",
+        "installer output",
+    );
     let log = p.stub_log();
     assert!(
         log.iter()
@@ -482,6 +513,11 @@ fn every_theme_with_a_dynamicui_conf_is_installed_by_default() {
         assert_missing(&fe.join(format!("{t}/webpulse")));
         assert_missing(&p.state.join(format!("plugin.{t}")));
     }
+    assert_contains(
+        &read(&p.engine_log),
+        "meridian-registry remove --registry",
+        "hub unregistered",
+    );
 }
 
 #[test]
@@ -691,8 +727,8 @@ fn uninstall_reverses_everything_and_keeps_data_purge_removes_it() {
     );
     assert_eq!(
         count(&log, "manage_hooks delete script "),
-        2,
-        "both hooks deleted"
+        3,
+        "all hooks deleted"
     );
     assert_eq!(
         read(&p.state.join("hooks")).trim(),

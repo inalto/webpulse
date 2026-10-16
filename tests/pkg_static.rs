@@ -27,6 +27,7 @@ const SHELL_SCRIPTS: &[&str] = &[
 const PHP_FILES: &[&str] = &[
     "cpanel/webpulse/index.live.php",
     "cpanel/webpulse/api.live.php",
+    "cpanel/webpulse/frame.live.php",
     "cpanel/webpulse/lib/LiveApiUser.php",
     "cpanel/webpulse/lib/CgiBridge.php",
 ];
@@ -149,7 +150,7 @@ fn the_php_implementation_is_gone_and_the_shims_are_thin() {
     allowed.sort();
     assert_eq!(php, allowed, "PHP files of the repository");
 
-    for f in ["index.live.php", "api.live.php"] {
+    for f in ["index.live.php", "api.live.php", "frame.live.php"] {
         let src = read(&r.join("cpanel/webpulse").join(f));
         assert_contains(&src, "CgiBridge::run", &format!("{f} runs the binary"));
         assert_not_contains(&src, "autoload", &format!("{f} has no autoloader"));
@@ -297,6 +298,52 @@ fn png_icon_is_a_48x48_rgba_image_with_transparency() {
     assert_eq!(raw[1 + 3], 0, "top-left alpha");
     let inside = 24 * stride + 1 + 4 * 6;
     assert_eq!(raw[inside + 3], 255, "inside alpha");
+}
+
+#[test]
+fn meridian_hub_manifest_and_remote_entry_are_valid() {
+    let r = repo();
+    let m: Value = serde_json::from_str(&read(&r.join("cpanel/meridian/manifest.json"))).unwrap();
+    assert_eq!(
+        m["slug"], "webpulse",
+        "slug = theme dir of the plugin files"
+    );
+    assert_eq!(m["contractVersion"], "1.0.0");
+    assert_eq!(m["entrypoints"]["mf"], "./remoteEntry.js");
+    assert_eq!(m["nav"]["path"], "/webpulse");
+    assert_eq!(m["nav"]["section"], "monitor");
+    assert_eq!(m["platforms"], json!(["cpanel"]));
+    assert_eq!(
+        m["dependencies"]["required"],
+        json!(["webpulse"]),
+        "hidden without the feature"
+    );
+    assert_eq!(
+        m["version"],
+        read(&r.join("VERSION")).trim(),
+        "manifest version = VERSION"
+    );
+    for key in ["id", "displayName", "icon", "loadPriority", "searchIndex"] {
+        assert!(m.get(key).is_some(), "manifest has {key}");
+    }
+    let js = read(&r.join("cpanel/meridian/remoteEntry.js"));
+    assert_contains(&js, "export function init", "federation init");
+    assert_contains(&js, "export function get", "federation get");
+    assert_contains(&js, "WebPulseHub", "component name ends with Hub");
+    assert_contains(&js, "frame.live.php", "embeds the frame page");
+    if have("node") {
+        let (rc, out) = cmd(&[
+            "node",
+            "--input-type=module",
+            "-e",
+            &format!(
+                "import('file://{}').then(m => {{ if (typeof m.init !== 'function' || typeof m.get !== 'function') process.exit(2); }})",
+                r.join("cpanel/meridian/remoteEntry.js").display()
+            ),
+        ])
+        .go();
+        assert_eq!(rc, 0, "remoteEntry.js is a valid ES module\n{out}");
+    }
 }
 
 #[test]

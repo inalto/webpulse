@@ -73,8 +73,28 @@ Icons must use solid fills only, `viewBox` without `width`/`height`, no
 `<title>`, `<style>` or ids. Meridian reads `assets/application_icons/<id>.svg`
 directly (formats svg/png, see the theme's `config.json`).
 
-**Meridian side menu.** Meridian's left navigation ("aside") does not come
-from dynamicui but from menu files: `Cpanel::Plugins::MenuBuilder` merges
+**Meridian side menu (hub registry).** Meridian is a React shell whose side
+navigation is built only from *hub manifests* listed in
+`/usr/local/cpanel/base/frontend/meridian/_assets/_registry.js` (owned by the
+`cpanel-meridian-plugin` RPM and regenerated on theme updates). Legacy
+dynamicui apps are not rendered there at all (`applications` is empty in the
+shell data), so WebPulse ships a hub: `cpanel/meridian/manifest.json` (slug
+`webpulse`, `nav.path /webpulse`, `nav.section monitor`, `dependencies.required
+["webpulse"]` so it hides when the feature is off) and
+`cpanel/meridian/remoteEntry.js`, a hand-written ES-module Module-Federation
+remote: the shell calls `init(shareScope)` (React 19 singleton) and
+`get("./module")`, then renders the exported `WebPulseHub` component (first
+export ending in `Hub`) at `nav.path`. The component embeds
+`webpulse/frame.live.php` (the dashboard as a full document, no cPanel chrome)
+in a same-origin iframe sized to its content. The installer copies both files
+into `meridian/webpulse/`, runs `webpulse meridian-registry add --registry
+… --manifest … --entry …` (idempotent, atomic, other entries untouched) and
+registers a `System::upcp` post hook (`hooks/upcp_post.sh`) that re-applies
+the entry after cPanel updates; uninstall runs `meridian-registry remove`.
+Contract version 1.0.0 is checked by the shell: an incompatible major is
+skipped with a console warning, never an error.
+
+**Jupiter side menu (LeftMenu.yaml).** Jupiter's left navigation uses menu files: `Cpanel::Plugins::MenuBuilder` merges
 `/usr/local/cpanel/Cpanel/Plugins/menus/LeftMenu.yaml` with every
 `/var/cpanel/plugins/*/**/LeftMenu.yaml` into the cache
 `/var/cpanel/menus/LeftMenu.yaml`; `install_plugin`/`uninstall_plugin` trigger

@@ -13,7 +13,7 @@ tail -n 50 /var/webpulse/log/webpulse.log
 
 ## The plugin is not in Meridian's side menu
 
-Meridian's left navigation is built from menu files, not from the Metrics group. WebPulse 0.2.2 and later ship `menu/LeftMenu.yaml` and stage the plugin descriptor at `/var/cpanel/plugins/webpulse/`, which `install_plugin` merges into `/var/cpanel/menus/LeftMenu.yaml`. If the entry is missing, run the installer again with `--update` and check with `grep webpulse /var/cpanel/menus/LeftMenu.yaml`. Reload the cPanel page afterwards.
+Meridian's side navigation lists only *hubs* registered in `/usr/local/cpanel/base/frontend/meridian/_assets/_registry.js`; it does not show the classic Metrics icons at all. WebPulse 0.2.3 and later register their own hub there (an "Analytics" entry in the Monitor section that embeds the dashboard) and re-apply it after every cPanel update. If it is missing: run the installer again with `--update`, check that `grep -c '"slug": "webpulse"' /usr/local/cpanel/base/frontend/meridian/_assets/_registry.js` prints 1, make sure the account has the `webpulse` feature, then reload the page.
 
 ## Reading `webpulse status`
 
