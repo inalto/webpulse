@@ -173,7 +173,7 @@ final class VisitsLog
         if ($v === null || $v === '') {
             return $default;
         }
-        if (!is_string($v) && !is_int($v) || !preg_match('/^\d{1,19}$/', (string) $v)) {
+        if (!is_string($v) && !is_int($v) || !preg_match('/^\d{1,19}\z/', (string) $v)) {
             throw new InvalidArgumentException('"' . $name . '" must be a non-negative integer');
         }
         return (int) $v;

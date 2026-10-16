@@ -8,10 +8,17 @@ namespace WebPulse;
  * Minimal file logger: <log_dir>/webpulse.log, rotated by size (5 x 5 MiB).
  * Never throws: when the file cannot be written (e.g. the cPanel plugin runs
  * as the account) messages are dropped, or mirrored to stderr when verbose.
+ *
+ * Messages often embed attacker-controlled text (file names in ~/logs, keys
+ * of settings.json, log lines): every message is passed through
+ * {@see Log::sanitize()} so that it stays one line of valid UTF-8 and cannot
+ * forge log entries.
  */
 final class Log
 {
     public const LEVELS = ['debug' => 0, 'info' => 1, 'warn' => 2, 'error' => 3];
+    /** Longest message kept (bytes). */
+    public const MAX_MESSAGE = 8192;
     private const MAX_BYTES = 5 * 1024 * 1024;
     private const KEEP = 5;
 
@@ -77,7 +84,7 @@ final class Log
         if ($lv < $this->min) {
             return;
         }
-        $line = date('Y-m-d\TH:i:sP') . ' [' . $level . '] ' . getmypid() . ' ' . $msg;
+        $line = date('Y-m-d\TH:i:sP') . ' [' . $level . '] ' . getmypid() . ' ' . self::sanitize($msg);
         if ($ctx !== []) {
             $line .= ' ' . json_encode($ctx, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
         }
@@ -106,6 +113,15 @@ final class Log
         if (@file_put_contents($this->file, $line, FILE_APPEND | LOCK_EX) !== false && $fresh) {
             @chmod($this->file, 0600);
         }
+    }
+
+    /**
+     * One log line's worth of text: invalid UTF-8 and control characters
+     * (CR, LF, ESC…) replaced with "?", truncated to MAX_MESSAGE bytes.
+     */
+    public static function sanitize(string $msg): string
+    {
+        return Util\Str::truncate(Util\Str::clean($msg), self::MAX_MESSAGE, "\u{2026}");
     }
 
     private function rotate(): void

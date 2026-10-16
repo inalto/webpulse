@@ -35,16 +35,19 @@ final class LogFiles
     /**
      * Candidate live logs of a domain: `<domain>` and `<domain>-ssl_log` in
      * every domlogs_dirs entry. The same physical file reached through two
-     * directories (symlinked layouts) is returned once.
+     * directories (symlinked layouts) is returned once. `shared` is true for
+     * files found in a directory common to every account (no {user} in its
+     * template): the caller must make sure the domain belongs to $user before
+     * reading those.
      *
-     * @return array<int,array{path:string,https:bool}>
+     * @return array<int,array{path:string,https:bool,shared:bool}>
      */
     public function forDomain(string $user, string $domain): array
     {
         Paths::assertDomain($domain);
         $out = [];
         $seen = [];
-        foreach ($this->paths->domlogsDirs($user) as $dir) {
+        foreach ($this->paths->domlogsDirMap($user) as $dir => $shared) {
             foreach ([$domain => false, $domain . '-ssl_log' => true] as $name => $https) {
                 $file = $dir . '/' . $name;
                 if (!is_file($file)) {
@@ -56,7 +59,7 @@ final class LogFiles
                     continue;
                 }
                 $seen[$id] = true;
-                $out[] = ['path' => $file, 'https' => $https];
+                $out[] = ['path' => $file, 'https' => $https, 'shared' => $shared];
             }
         }
         return $out;

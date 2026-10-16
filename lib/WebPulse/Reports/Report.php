@@ -90,7 +90,7 @@ final class Report
         if (is_int($v)) {
             return $v;
         }
-        if (!is_string($v) || !preg_match('/^-?\d{1,9}$/', $v)) {
+        if (!is_string($v) || !preg_match('/^-?\d{1,9}\z/', $v)) {
             throw new InvalidArgumentException('"' . $name . '" must be an integer');
         }
         return (int) $v;

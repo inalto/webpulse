@@ -26,6 +26,13 @@ final class LogSource
     public const FINGERPRINT_BYTES = 256;
     /** A "line" longer than this is cut (and will be rejected by the parser). */
     public const MAX_LINE = 65536;
+    /**
+     * Compressed bytes per inflate_add() call. Deflate expands at most ~1032:1,
+     * so one call yields at most ~8 MiB even for a decompression bomb.
+     */
+    public const INFLATE_SLICE = 8192;
+    /** Inflating stops (and the data is handed to the line splitter) once this much output is pending. */
+    public const INFLATE_MAX_OUT = 4194304;
 
     /** Tests: pretend zlib is missing to exercise the `gzip -dc` fallback. */
     public static bool $forceGzipCli = false;
@@ -38,6 +45,8 @@ final class LogSource
     private $pipe = null;
     private mixed $inflate = null;
     private string $pending = '';
+    private int $pendingPos = 0;
+    private bool $gzEnd = false;
     private string $buf = '';
     private int $pos = 0;
     private bool $eof = false;
@@ -90,7 +99,9 @@ final class LogSource
         if ($this->gzip && ($lst['mode'] & 0170000) !== 0100000) {
             throw new \RuntimeException("{$this->path} is not a regular file");
         }
-        $fh = @fopen($this->path, 'rb');
+        // Non-blocking open: a FIFO swapped in after lstat() (archives live in
+        // the account's own ~/logs) must not hang the collector.
+        $fh = @fopen($this->path, 'rbn');
         if ($fh === false) {
             throw new \RuntimeException("cannot open {$this->path}");
         }
@@ -311,38 +322,44 @@ final class LogSource
             }
             return $data;
         }
-        while (true) {
-            if ($this->pending === '') {
+        // Small input slices and an output budget keep memory bounded even
+        // for a decompression bomb (200 MB of one byte gzip to ~200 KB).
+        $out = '';
+        while (!$this->gzEnd && strlen($out) < self::INFLATE_MAX_OUT) {
+            if ($this->pendingPos >= strlen($this->pending)) {
                 if ($this->fh === null || feof($this->fh)) {
-                    return null;
+                    break;
                 }
                 $this->pending = (string) fread($this->fh, self::CHUNK);
+                $this->pendingPos = 0;
                 if ($this->pending === '') {
                     continue;
                 }
             }
-            $in = $this->pending;
-            $this->pending = '';
+            $in = substr($this->pending, $this->pendingPos, self::INFLATE_SLICE);
+            $this->pendingPos += strlen($in);
             $before = inflate_get_read_len($this->inflate);
-            $out = @inflate_add($this->inflate, $in, ZLIB_SYNC_FLUSH);
-            if ($out === false) {
+            $chunk = @inflate_add($this->inflate, $in, ZLIB_SYNC_FLUSH);
+            if ($chunk === false) {
                 if (trim($in, "\0") === '') {
-                    return null; // zero padding after the last member
+                    $this->gzEnd = true; // zero padding after the last member
+                    break;
                 }
                 throw new \RuntimeException("corrupt gzip data in {$this->path}");
             }
             if (inflate_get_status($this->inflate) === ZLIB_STREAM_END) {
+                // next member (concatenated gzip): rewind to the first unused byte
                 $used = inflate_get_read_len($this->inflate) - $before;
-                $this->pending = (string) substr($in, $used);
+                $this->pendingPos -= strlen($in) - $used;
                 $this->inflate = inflate_init(ZLIB_ENCODING_GZIP);
-                if (trim($this->pending, "\0") === '' && ($this->fh === null || feof($this->fh))) {
-                    $this->pending = '';
+                $rest = (string) substr($this->pending, $this->pendingPos);
+                if (trim($rest, "\0") === '' && ($this->fh === null || feof($this->fh))) {
+                    $this->gzEnd = true;
                 }
             }
-            if ($out !== '') {
-                return $out;
-            }
+            $out .= $chunk;
         }
+        return $out === '' ? null : $out;
     }
 
     /** Closes the file (and the gzip helper process). */

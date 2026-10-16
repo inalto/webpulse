@@ -11,7 +11,7 @@ namespace WebPulse\Http;
 final class Response
 {
     private const REASONS = [
-        200 => 'OK', 204 => 'No Content', 400 => 'Bad Request', 403 => 'Forbidden', 404 => 'Not Found',
+        200 => 'OK', 204 => 'No Content', 303 => 'See Other', 400 => 'Bad Request', 403 => 'Forbidden', 404 => 'Not Found',
         405 => 'Method Not Allowed', 409 => 'Conflict', 413 => 'Content Too Large', 500 => 'Internal Server Error',
         503 => 'Service Unavailable',
     ];

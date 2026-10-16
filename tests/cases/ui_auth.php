@@ -84,7 +84,7 @@ return [
         $env = SeedDb::fresh('ui-auth-admin');
         foreach (['admin.overview', 'admin.accounts', 'admin.settings', 'admin.jobs'] as $a) {
             T::eq(403, $status($env, 'user:alice', ['a' => $a]), "$a as user");
-            T::eq(200, $status($env, 'reseller:reseller1', ['a' => $a]), "$a as reseller");
+            T::eq($a === 'admin.settings' ? 403 : 200, $status($env, 'reseller:reseller1', ['a' => $a]), "$a as reseller");
             T::eq(200, $status($env, 'admin', ['a' => $a]), "$a as admin");
         }
         $acc = SeedDb::api($env, 'reseller:reseller1', ['a' => 'admin.accounts'])['json']['data']['accounts'];

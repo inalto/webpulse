@@ -68,9 +68,11 @@ final class Collector
     {
         $cp = $this->app->cpanelUsers();
         $reg = $this->app->registry();
-        $users = $cp->all();
         if ($onlyUser !== null) {
-            $users = isset($users[$onlyUser]) ? [$onlyUser => $users[$onlyUser]] : [];
+            $info = Paths::isValidUser($onlyUser) && $onlyUser !== 'root' && $onlyUser !== 'system' ? $cp->get($onlyUser) : null;
+            $users = $info !== null ? [$onlyUser => $info] : [];
+        } else {
+            $users = $cp->all();
         }
         foreach ($users as $user => $info) {
             $domains = $info['kinds'];
@@ -137,6 +139,36 @@ final class Collector
     }
 
     /**
+     * True when cPanel lists $domain for $user (/var/cpanel/users/<user> or
+     * /etc/userdomains). Registry rows alone do not count: they can be
+     * created from WHM by a reseller.
+     */
+    public function ownsDomain(string $user, string $domain): bool
+    {
+        return isset($this->app->cpanelUsers()->domainsOf($user)[$domain]);
+    }
+
+    /**
+     * Live logs of a domain that may be read for $user: files in per-account
+     * directories always, files in shared directories (no {user} in the
+     * template, e.g. /etc/apache2/logs/domlogs) only when the domain belongs
+     * to the account — otherwise any tenant's log could be imported.
+     *
+     * @return array<int,array{path:string,https:bool,shared:bool}>
+     */
+    private function liveFiles(string $user, string $domain): array
+    {
+        $files = $this->logFiles->forDomain($user, $domain);
+        $shared = array_filter($files, static fn (array $f): bool => $f['shared']);
+        if ($shared !== [] && !$this->ownsDomain($user, $domain)) {
+            $this->app->log->warn("not reading the shared logs of $domain for $user: cPanel does not list it for this account",
+                ['files' => array_values(array_column($shared, 'path'))]);
+            $files = array_values(array_filter($files, static fn (array $f): bool => !$f['shared']));
+        }
+        return $files;
+    }
+
+    /**
      * Tails the live logs of one domain.
      *
      * @param array<string,mixed>|null $settings validated user settings (read when null)
@@ -144,7 +176,7 @@ final class Collector
      */
     public function collectDomain(string $user, string $domain, ?array $settings = null): ?array
     {
-        $files = $this->logFiles->forDomain($user, $domain);
+        $files = $this->liveFiles($user, $domain);
         $dbFile = $this->app->paths->domainDb($user, $domain);
         if ($files === [] && !is_file($dbFile)) {
             return null;
@@ -161,7 +193,14 @@ final class Collector
             $stats['idle'] = true;
             return $stats;
         }
-        $run = $this->newRun($store, $domain, $tz, $ds, true);
+        // newest line already processed: stored visits stale at that point can be closed while loading
+        $watermark = null;
+        foreach ($cps as $cp) {
+            if ($cp['last_ts'] !== null) {
+                $watermark = max($watermark ?? 0, (int) $cp['last_ts'] - self::SWEEP_SLACK);
+            }
+        }
+        $run = $this->newRun($store, $domain, $tz, $ds, true, $watermark);
 
         $sources = [];
         foreach ($files as $f) {
@@ -204,6 +243,11 @@ final class Collector
             $this->app->log->warn("summary refresh failed for $user/$domain: " . $e->getMessage());
         }
         $stats['classes'] = $run->classes;
+        if ($run->sessions->evictedCount() > 0) {
+            $stats['visits_closed_early'] = $run->sessions->evictedCount();
+            $this->app->log->warn("$user/$domain: more than {$run->sessions->maxOpen()} visits open at once (max_open_visits); "
+                . $run->sessions->evictedCount() . ' closed early');
+        }
         if ($stats['lines'] > 0 || $stats['errors'] > 0) {
             $this->app->log->info("collected $user/$domain", ['files' => $stats['files'], 'lines' => $stats['lines'], 'bad' => $stats['bad'], 'ignored' => $stats['ignored']]);
         }
@@ -218,8 +262,10 @@ final class Collector
      */
     public function closeStaleVisits(DomainStore $store, string $tz): int
     {
-        $run = $this->newRun($store, $store->domain(), $tz, UserSettings::domainDefaults(), true);
-        $n = $run->sessions->closeStale($this->app->now());
+        $now = $this->app->now();
+        $run = $this->newRun($store, $store->domain(), $tz, UserSettings::domainDefaults(), true, $now);
+        $run->sessions->closeStale($now);
+        $n = $run->sessions->closedCount(); // includes the visits closed while loading
         if ($n > 0) {
             $run->flush();
         }
@@ -256,10 +302,14 @@ final class Collector
                 continue;
             }
             try {
-                $r = $this->backfillDomain($user, $domain, $list, $settings);
+                $r = $this->backfillDomain($user, $domain, $list, $settings, $archiveDir !== null);
             } catch (\Throwable $e) {
                 $tot['errors']++;
                 $this->app->log->error("backfill $user/$domain failed: " . $e->getMessage());
+                continue;
+            }
+            if (isset($r['skipped'])) {
+                $tot['skipped'][] = "$domain ({$r['skipped']})";
                 continue;
             }
             $tot['domains']++;
@@ -273,10 +323,17 @@ final class Collector
     /**
      * @param array<int,array{path:string,https:bool,size:int,mtime:int}> $archives
      * @param array<string,mixed> $settings
-     * @return array<string,mixed>
+     * @param bool $trustedDir the archives come from a directory given explicitly by root (--archive-dir)
+     * @return array<string,mixed> stats; with a `skipped` reason when nothing was read
      */
-    public function backfillDomain(string $user, string $domain, array $archives, array $settings): array
+    public function backfillDomain(string $user, string $domain, array $archives, array $settings, bool $trustedDir = false): array
     {
+        if (!$trustedDir && $this->app->paths->archiveDirShared() && !$this->ownsDomain($user, $domain)) {
+            // one archive directory for every account: only the owner's domains may be imported
+            $this->app->log->warn("not importing the archives of $domain for $user: cPanel does not list it for this account");
+            return ['files' => 0, 'lines' => 0, 'imported' => 0, 'bad' => 0, 'ignored' => 0, 'skipped_files' => 0, 'errors' => 0,
+                'skipped' => "not a domain of $user"];
+        }
         $ds = UserSettings::forDomain($settings, $domain);
         $store = DomainStore::open($this->app->paths, $user, $domain, false);
         $tz = $this->resolveTimezone($store, $user, $ds);
@@ -491,7 +548,12 @@ final class Collector
         $timeout = max(60, (int) $this->app->config->get('session_timeout_min', 30) * 60);
         $st = $store->pdo()->prepare('SELECT COUNT(*) FROM open_visits WHERE last_ts <= ?');
         $st->execute([$now - $timeout]);
-        return (int) $st->fetchColumn() === 0;
+        if ((int) $st->fetchColumn() !== 0) {
+            return false;
+        }
+        // more stored visits than the cap (e.g. after lowering max_open_visits): load to close the excess
+        $cap = (int) $this->app->config->get('max_open_visits', Sessionizer::DEFAULT_MAX_OPEN);
+        return $cap <= 0 || (int) $store->pdo()->query('SELECT COUNT(*) FROM open_visits')->fetchColumn() <= $cap;
     }
 
     /** @return array<string,array<string,mixed>> path => checkpoint row */
@@ -507,7 +569,7 @@ final class Collector
     /**
      * @param array{timezone:?string,exclude_ips:string[],exclude_paths:string[]} $ds
      */
-    private function newRun(DomainStore $store, string $domain, string $tz, array $ds, bool $persistent): DomainRun
+    private function newRun(DomainStore $store, string $domain, string $tz, array $ds, bool $persistent, ?int $watermark = null): DomainRun
     {
         $reg = $this->app->registry();
         return new DomainRun(
@@ -522,6 +584,7 @@ final class Collector
             $this->app->geoIp(),
             static fn (string $day): string => $reg->salt($day),
             $persistent,
+            $watermark,
         );
     }
 

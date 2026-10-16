@@ -11,8 +11,9 @@ namespace WebPulse;
  */
 final class Paths
 {
-    public const USER_RE = '/^[a-z0-9_][a-z0-9_-]{0,31}$/';
-    public const DOMAIN_RE = '/^(?=.{1,253}$)[a-z0-9_](?:[a-z0-9_-]{0,62})(?:\.[a-z0-9_](?:[a-z0-9_-]{0,62}))*$/';
+    /** Anchored with \z (not $, which also matches before a trailing "\n"). */
+    public const USER_RE = '/^[a-z0-9_][a-z0-9_-]{0,31}\z/';
+    public const DOMAIN_RE = '/^(?=.{1,253}\z)[a-z0-9_](?:[a-z0-9_-]{0,62})(?:\.[a-z0-9_](?:[a-z0-9_-]{0,62}))*\z/';
 
     /** Paths derived from $config; $root is the install directory (repo root). */
     public function __construct(private Config $config, private string $root)
@@ -118,13 +119,32 @@ final class Paths
     /** @return string[] domlog directories with {user} substituted */
     public function domlogsDirs(string $user): array
     {
+        return array_keys($this->domlogsDirMap($user));
+    }
+
+    /**
+     * Domlog directories with {user} substituted, mapped to true when the
+     * directory is shared by every account (template without {user}, e.g.
+     * /etc/apache2/logs/domlogs): files there may belong to any tenant.
+     *
+     * @return array<string,bool> directory => shared
+     */
+    public function domlogsDirMap(string $user): array
+    {
         $out = [];
         foreach ((array) $this->config->get('paths.domlogs_dirs', []) as $d) {
             if (is_string($d) && $d !== '') {
-                $out[] = rtrim(str_replace('{user}', self::assertUser($user), $d), '/');
+                $dir = rtrim(str_replace('{user}', self::assertUser($user), $d), '/');
+                $out[$dir] = ($out[$dir] ?? true) && !str_contains($d, '{user}');
             }
         }
-        return array_values(array_unique($out));
+        return $out;
+    }
+
+    /** True when the archive directory template has no {user} placeholder (one directory for every account). */
+    public function archiveDirShared(): bool
+    {
+        return !str_contains((string) $this->config->get('paths.archive_dir'), '{user}');
     }
 
     /** Archive directory of a user (default /home/<user>/logs). */

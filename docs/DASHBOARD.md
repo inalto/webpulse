@@ -30,7 +30,7 @@ technical panels, AWStats' completeness):
 ```
 ┌ Header ─────────────────────────────────────────────────────────────────────┐
 │ ● WebPulse   [example.com ▾]   [Today|Yesterday|7d|30d|Month|Last month|12m|Custom]  [Compare □]  [☾] │
-│ Live: 7 active visitors · last collection 3 min ago                        │
+│ Live: 7 active visits · last collection 3 min ago   (90 days / This year / All time live in the narrow-screen drop-down)                        │
 ├ KPI row (8 tiles, 4 per row on tablet, 2 on phone) ─────────────────────────┤
 │ Visits  Unique visitors  Pageviews  Pages/visit  Avg. duration  Bounce rate  Bandwidth  Bot share │
 │ each: big number, Δ vs previous period (green/red, muted when |Δ|<1 %), 30-point sparkline │

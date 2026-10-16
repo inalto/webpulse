@@ -42,8 +42,8 @@ extract the plugin from the archive"; it only reads `install.json`):
     index.live.php      dashboard page (LiveAPI PHP)
     api.live.php        JSON API
     webpulse.svg        48×48 icon (also referenced by install.json)
-    lib -> /usr/local/webpulse/lib   (NOT a symlink: copied by the installer for
-                                      robustness; `webpulse update` re-copies)
+    lib/, ui/, VERSION      copies made by the installer (not symlinks, for
+                            robustness; `install.sh --update` re-copies them)
 ```
 `install.json` (in `/usr/local/webpulse/cpanel/plugin/`, together with the icon):
 ```json
@@ -87,11 +87,15 @@ must accept both and fall back to `getenv('REMOTE_USER')`, then to
 /usr/local/cpanel/whostmgr/docroot/addon_plugins/webpulse.png  48×48 transparent PNG
 /var/cpanel/apps/webpulse.conf
 ```
-`index.cgi` header lines (first lines after the shebang, as comments):
+`index.cgi` header lines (PHP `#` comments right after `<?php`, which follows the
+shebang on line 1; placed outside `<?php` they would be printed):
 ```
 #WHMADDON:webpulse:WebPulse Analytics:webpulse.png
 #ACLS:all
 ```
+The AppConfig `acls=all,list-accts` is what actually gates access in modern WHM;
+the `#ACLS` comment is the legacy marker. Whether a reseller with only
+`list-accts` sees the menu entry must be confirmed on a real server.
 AppConfig `webpulse.conf`:
 ```
 name=webpulse

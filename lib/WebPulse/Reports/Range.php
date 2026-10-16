@@ -134,7 +134,7 @@ final class Range
     /** True for a syntactically and calendrically valid YYYY-MM-DD. */
     public static function isDate(string $s): bool
     {
-        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $s, $m)) {
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})\z/', $s, $m)) {
             return false;
         }
         return checkdate((int) $m[2], (int) $m[3], (int) $m[1]);

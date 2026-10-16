@@ -1,0 +1,121 @@
+# WHM Administration
+
+The WHM plugin is where the server administrator (and resellers, within their own accounts) decides
+what gets collected, tunes the settings and runs jobs. Open it under **WHM » Plugins » WebPulse
+Analytics**, or go to `https://<server>:2087/cgi/webpulse/index.cgi`.
+
+![The Server tab](https://raw.githubusercontent.com/inalto/webpulse/main/docs/screenshots/server-1280-dark.png)
+
+The page is the normal dashboard plus an extra first tab, **Server**. The other tabs show any domain
+you pick in the domain picker; the cPanel-only **Settings** tab is not shown in WHM.
+
+## The Server tab
+
+### Server overview
+
+A row of tiles at the top:
+
+| Tile | Shows |
+|------|-------|
+| **Visits today**, **Visits, 7 days**, **Visits, 30 days** | Totals across all accounts you can see, with pageviews. |
+| **Bandwidth, 30 days** | Bytes sent to human visitors, with the 7-day figure. |
+| **Bot share, 30 days** | Share of requests from bots, with the number of bot hits. Marked *(partial)* on very large servers (more than 300 domains). |
+| **Data size** | Disk space of all domain databases, the number of databases and how many accounts collect. |
+| **Collector** | When the last collection ran, and how old the newest log line is (the lag). |
+| **Integration** | Tick or cross for **Cron job**, **Stats hook** and **GeoIP** (with the database date). |
+
+Below it, **Top domains** lists the busiest domains of the last 30 days with visits, pageviews,
+bandwidth, bot hits, visits today and the last collection. Click a domain to open its dashboard.
+
+### Accounts and the three-state switch
+
+The **Accounts** table lists every account with its owner (reseller), a state badge (**Collecting** or
+**Off**), the switch, visits in the last 30 days and the size of its data. A search box filters accounts
+and domains. Click an account to expand its domains.
+
+Each account and each domain has a switch with three positions:
+
+| Position | Meaning |
+|----------|---------|
+| **Default** | Follow the server setting **Collect for new and "Default" accounts** (on unless you changed it). For a domain: follow the account. |
+| **On** | Collect, whatever the default says. |
+| **Off** | Do not collect. |
+
+Rules to remember:
+
+- A domain setting wins over its account setting, **except** when the account is explicitly **Off**:
+  that turns off all its domains.
+- Switching off stops new collection. Data that was already collected stays until you purge it.
+- Accounts and domains are discovered by the collector. A new account appears after the next
+  collection run. A domain shows *no data yet* until its first log line is processed.
+- The same switches exist on the command line: `webpulse accounts enable|disable|reset <user>` and
+  `webpulse domains enable|disable|reset <user> <domain>` ([[Command Line]]).
+
+### Settings (administrator only)
+
+Server-wide settings are stored in the WebPulse registry and win over `config.json`. They are also
+editable with `webpulse config set` ([[Configuration]]).
+
+| Label | Key | Meaning |
+|-------|-----|---------|
+| **Collect for new and "Default" accounts** | `default_enabled` | Whether accounts without an explicit On/Off switch are collected. |
+| **Keep individual visits for (days)** | `raw_retention_days` | 1 to 3650. How long the visits log and raw events are kept. Aggregated reports are kept forever. |
+| **Visit timeout (minutes)** | `session_timeout_min` | 5 to 240. Inactivity that ends a visit. |
+| **Max rows per report per day** | `max_rows_per_dim` | 10 to 100000. Longer tails are folded into `(other)` by the nightly rollup. |
+| **Store visitor IP addresses in the visits log** | `store_ip` | Off by default. See [[Privacy and GDPR]]. |
+| **Geolocate visitors (needs the GeoIP database)** | `geoip.enabled` | Country lookup for new hits. |
+| **Excluded IPs / CIDRs (server-wide)** | `exclude_ips` | Not counted for any account. |
+| **Excluded path prefixes (server-wide)** | `exclude_paths` | Not counted for any account. |
+| **Default timezone** | `timezone` | Used when neither the account owner nor the account sets one. Empty means the server timezone. |
+
+Settings apply to data collected after you save. They are not applied retroactively.
+
+### Jobs
+
+Three buttons start a background job (the same commands as the CLI, with `--job` so that they show up
+in the history):
+
+| Button | Runs | Notes |
+|--------|------|-------|
+| **Run collection now** | `webpulse collect` | For one account, or for all accounts when "All accounts" is chosen. Cron does this every 5 minutes anyway. |
+| **Backfill from archives** | `webpulse backfill --user <account>` | Imports `/home/<account>/logs/*.gz`. You must pick an account. Files already imported are skipped, so it is safe to repeat. |
+| **Run rollup** | `webpulse rollup` | Closes stale visits, caps report sizes, applies retention. Administrator only; cron runs it nightly at 02:10. |
+
+The job table shows the number, type, scope, when it started, how long it took, how many log lines it
+processed and its status (`running`, `ok`, `error`, `skipped`). It refreshes by itself while a job is
+running. The history keeps the last 500 jobs.
+
+## Resellers
+
+A reseller can open the plugin and sees only the accounts it owns (the `OWNER=` line in
+`/var/cpanel/users/<account>`). Root owns its own accounts. Within that scope a reseller can:
+
+- see the Server tab, the top domains and any of its accounts' dashboards,
+- change the Default/On/Off switches of its accounts and their domains,
+- run **collection** and **backfill** for one of its accounts (a reseller must pick an account).
+
+A reseller cannot see or change the global settings, cannot run the rollup, and cannot purge data.
+Requests for accounts owned by someone else are refused. Any other user who is neither root nor a
+reseller with accounts gets "forbidden".
+
+## Deleting statistics
+
+The WHM interface has no purge button. Use the CLI as root:
+
+```bash
+webpulse purge --user <user> --yes                    # all databases of an account
+webpulse purge --user <user> --domain example.com --yes
+```
+
+## Account owners and the feature list
+
+The cPanel icon is controlled by a cPanel feature called `webpulse`. In **WHM » Feature Manager** the
+entry is called "WebPulse Analytics". Which accounts are *collected* is controlled by the switches on
+this page; which accounts *see* the icon is controlled by the feature list. They are independent.
+
+## See also
+
+- [[Using the Dashboard]]
+- [[Command Line]]
+- [[Configuration]]
+- [[How It Works]]

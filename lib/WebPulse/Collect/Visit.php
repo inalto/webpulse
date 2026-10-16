@@ -11,8 +11,6 @@ final class Visit
 {
     /** @var array<string,bool> distinct page keys seen (capped) */
     public array $pages = [];
-    /** @var array<int,array{0:string,1:string}> visit-level dim rows */
-    public array $vdims;
     public ?int $firstPv = null;
     public int $lastPv;
     public int $pv = 0;
@@ -38,7 +36,17 @@ final class Visit
         public array $attrs,
     ) {
         $this->lastPv = $start;
-        $this->vdims = Sessionizer::visitDims($attrs);
+    }
+
+    /**
+     * Visit-level dim rows, derived from the attributes on demand (not
+     * stored: tens of thousands of visits may be open at once).
+     *
+     * @return array<int,array{0:string,1:string}>
+     */
+    public function vdims(): array
+    {
+        return Sessionizer::visitDims($this->attrs);
     }
 
     /** Duration in seconds between the first and the last pageview (0 for bounces). */

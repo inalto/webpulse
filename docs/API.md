@@ -138,13 +138,18 @@ so the Settings tab is testable); admin and reseller get 403, an empty body 400.
   + override), domains:[{domain, kind, enabled, has_data, db_bytes, visits_30d,
   last_collect_at}]`, `q` filter and paging.
 * `a=admin.set_account` (POST `{user, enabled: true|false|null, timezone?}`)
-* `a=admin.set_domain` (POST `{user, domain, enabled: true|false|null}`)
-* `a=admin.settings` (GET) / `a=admin.save_settings` (POST, root only) –
+* `a=admin.set_domain` (POST `{user, domain, enabled: true|false|null}`) –
+  `domain` must belong to `user` (live registry row, cPanel user files /
+  `/etc/userdomains`, or an existing database), else 404.
+* `a=admin.settings` (GET, root only) / `a=admin.save_settings` (POST, root only) –
   `default_enabled, raw_retention_days, max_rows_per_dim, session_timeout_min,
   store_ip, exclude_ips[], exclude_paths[], geoip.enabled, timezone`.
 * `a=admin.run` (POST `{type: "collect"|"backfill"|"rollup", user?, domain?}`)
-  – spawns `bin/webpulse <type> … --job` detached (`nohup … &`), returns the
-  job id; the UI polls `admin.jobs`.
+  – spawns `bin/webpulse <type> … --job` detached (`nohup … &`), returns
+  `{job_id}` only; the UI polls `admin.jobs`. `domain` must be a domain of
+  `user` (404 otherwise). 409 `conflict` when a job of the same type and scope
+  is running, or when 3 jobs are running (rows "running" for more than 6 hours
+  are presumed dead and ignored).
 * `a=admin.jobs` – last 50 rows of `jobs`.
 * `a=admin.purge` (POST `{user, domain?, confirm: "DELETE"}`, root only) –
   deletes the domain DB(s).

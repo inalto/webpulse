@@ -60,6 +60,27 @@ final class CpanelUsers
         return $this->all = $out;
     }
 
+    /**
+     * One account (same shape as an all() entry), or null when it does not
+     * exist. Cheaper than all() on servers with many accounts.
+     *
+     * @return array{owner:?string,domains:string[],kinds:array<string,string>,main:?string,home:string}|null
+     */
+    public function get(string $user): ?array
+    {
+        if (isset($this->all[$user])) {
+            return $this->all[$user];
+        }
+        if ($this->all !== null || !$this->exists($user)) {
+            return null;
+        }
+        $file = $this->paths->cpanelUsersDir() . '/' . $user;
+        if (is_link($file) || !is_file($file)) {
+            return null;
+        }
+        return $this->read($user);
+    }
+
     /** True when /var/cpanel/users/<user> exists. */
     public function exists(string $user): bool
     {

@@ -122,7 +122,7 @@ final class GeoIp
         }
         foreach (['country', 'registered_country', 'represented_country'] as $k) {
             $c = $rec[$k]['iso_code'] ?? null;
-            if (is_string($c) && preg_match('/^[A-Za-z]{2}$/', $c)) {
+            if (is_string($c) && preg_match('/^[A-Za-z]{2}\z/', $c)) {
                 return strtolower($c);
             }
         }

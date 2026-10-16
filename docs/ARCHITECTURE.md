@@ -92,9 +92,9 @@
    then, closed visits are copied to `visits`).
 6. **DomainStore** accumulates all counters in memory during a run and flushes
    them in a single transaction per log file (batched `INSERT … ON CONFLICT DO
-   UPDATE`), so a 1 M-line log costs a few seconds and the DB is locked for
-   milliseconds at a time. Target throughput ≥ 20 000 lines/s on commodity
-   hardware.
+   UPDATE`), so a 1 M-line log costs about half a minute and the DB is locked for
+   milliseconds at a time. Measured ≈ 30 000 lines/s, 26 MiB peak memory on the
+   development machine (target ≥ 20 000 lines/s).
 7. **Rollup** (nightly 02:10): closes stale visits, caps high-cardinality
    dimensions per day to `max_rows_per_dim` (rest folded into `(other)`),
    purges raw tables older than `raw_retention_days`, prunes `visitor_day`
@@ -147,6 +147,7 @@ server run on a machine without cPanel (see DEVELOPMENT.md).
   "exclude_ips": [],
   "exclude_paths": ["/.well-known/", "/cpanel", "/whm", "/webmail", "/cgi-sys/"],
   "count_head_requests": false,
+  "max_open_visits": 50000,
   "geoip": { "enabled": false, "country_db": "/var/webpulse/geoip/dbip-country-lite.mmdb", "city_db": null },
   "php_bin": null,
   "paths": {
@@ -166,6 +167,13 @@ server run on a machine without cPanel (see DEVELOPMENT.md).
 WHM UI can edit are stored in `registry.settings` and override the file, so the
 file is only touched by the installer.
 
+`max_open_visits` (engine-only, file only) caps the visits a domain keeps open
+in memory during a run. Beyond it the visits idle the longest are closed early,
+with all their counters (a visitor coming back starts a new visit), and a
+warning is logged; at load time stored visits beyond the cap, or already stale,
+are closed in batches instead of being loaded. 50 000 open visits take roughly
+100 MB.
+
 ## Security model
 
 * Collector and WHM plugin run as root; the cPanel plugin runs as the account.
@@ -184,4 +192,28 @@ file is only touched by the installer.
   attackers).
 * SQL only via prepared statements; dimension names are whitelisted.
 * The collector reads user-writable `settings.json` with `lstat` (no symlinks),
-  a 64 KiB size cap, strict JSON schema, and never writes into user space.
+  then a non-blocking open whose `fstat` must be the same regular file (a FIFO
+  renamed into place cannot block it), a 64 KiB size cap, strict JSON schema,
+  and never writes into user space. Archives in `~/logs` are opened the same
+  way and decompressed in small slices with an output budget (gzip bombs stay
+  in bounded memory).
+* A domain is only read from a *shared* domlog directory (a `domlogs_dirs`
+  entry without `{user}`, e.g. `/etc/apache2/logs/domlogs`) for an account
+  when cPanel lists it for that account (`/var/cpanel/users`,
+  `/etc/userdomains`) — a registry row is not enough. WHM's
+  `admin.set_domain`/`run`/`purge` only accept a domain of the account.
+* The global collect runs each account in its own child process
+  (`collect --user U --child --json`): a fatal error in one account (memory)
+  cannot stop the others. Open visits are capped (`max_open_visits`).
+* `webpulse serve` (dev only) refuses to run as root without `--allow-root`,
+  requires a random token (first page load `?token=`, then a SameSite=Strict
+  cookie or `X-WebPulse-Dev-Token`) and rejects Host headers other than
+  `127.0.0.1:PORT` / `localhost:PORT`.
+* Every log message is sanitised (control characters replaced, length
+  capped): file names and JSON keys come from accounts.
+* MaxMind DB files are decoded with a per-record budget (20 000 values),
+  pointer-to-pointer is rejected, and the metadata is validated before the
+  search tree is used. `geoip-update` streams to a temporary file, caps the
+  download at 64 MiB and follows at most one redirect, to https only.
+* `admin.run` refuses a job whose type and scope is already running and more
+  than 3 running jobs (409); it returns the job id only.

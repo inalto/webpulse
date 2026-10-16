@@ -15,10 +15,17 @@ namespace WebPulse\Classify;
  *
  * Files up to $maxMemory bytes are loaded in memory; larger ones are read
  * with fseek/fread.
+ *
+ * Decoding is bounded for hostile files: one record may expand to at most
+ * MAX_NODES values (pointers re-used through the cache are charged at their
+ * full size), a pointer may not point to another pointer, and nesting is
+ * limited to 64 levels.
  */
 final class MmdbReader
 {
     private const MARKER = "\xAB\xCD\xEFMaxMind.com";
+    /** Maximum number of values one record (or the metadata) may decode to. */
+    public const MAX_NODES = 20000;
 
     private string $data = '';
     /** @var resource|null */
@@ -33,6 +40,10 @@ final class MmdbReader
     private int $dataStart;
     private int $ipv4Start = 0;
     private int $nodeBytes;
+    /** Values left in the budget of the current decode. */
+    private int $budget = 0;
+    /** @var array<int,array{0:mixed,1:int}> pointer target => [value, nodes] (current decode only) */
+    private array $ptrCache = [];
 
     /**
      * @throws \RuntimeException when the file is missing or not a valid MMDB
@@ -63,21 +74,33 @@ final class MmdbReader
             throw new \RuntimeException("$file is not a MaxMind DB (metadata marker not found)");
         }
         $metaStart = $this->fileSize - $tailLen + $pos + strlen(self::MARKER);
-        [$meta] = $this->decode($metaStart, $metaStart);
+        $meta = $this->decodeRoot($metaStart, $metaStart);
         if (!is_array($meta) || !isset($meta['node_count'], $meta['record_size'], $meta['ip_version'])) {
             throw new \RuntimeException("$file has invalid metadata");
         }
+        // validate the metadata before any use of the search tree
+        foreach (['node_count', 'record_size', 'ip_version'] as $k) {
+            if (!is_int($meta[$k])) {
+                throw new \RuntimeException("$file has invalid metadata ($k)");
+            }
+        }
         $this->meta = $meta;
-        $this->nodeCount = (int) $meta['node_count'];
-        $this->recordSize = (int) $meta['record_size'];
-        $this->ipVersion = (int) $meta['ip_version'];
+        $this->nodeCount = $meta['node_count'];
+        $this->recordSize = $meta['record_size'];
+        $this->ipVersion = $meta['ip_version'];
         if (!in_array($this->recordSize, [24, 28, 32], true)) {
             throw new \RuntimeException("$file: unsupported record size {$this->recordSize}");
+        }
+        if ($this->ipVersion !== 4 && $this->ipVersion !== 6) {
+            throw new \RuntimeException("$file: unsupported IP version {$this->ipVersion}");
+        }
+        if ($this->nodeCount < 1) {
+            throw new \RuntimeException("$file: invalid node count {$this->nodeCount}");
         }
         $this->nodeBytes = intdiv($this->recordSize * 2, 8);
         $this->treeSize = $this->nodeBytes * $this->nodeCount;
         $this->dataStart = $this->treeSize + 16;
-        if ($this->treeSize > $this->fileSize) {
+        if ($this->dataStart > $metaStart - strlen(self::MARKER)) {
             throw new \RuntimeException("$file: search tree larger than the file");
         }
         if ($this->ipVersion === 6) {
@@ -134,8 +157,19 @@ final class MmdbReader
         if ($offset >= $this->fileSize) {
             throw new \RuntimeException("{$this->file}: invalid data pointer");
         }
-        [$value] = $this->decode($offset, $this->dataStart);
-        return [$value, $i];
+        return [$this->decodeRoot($offset, $this->dataStart), $i];
+    }
+
+    /** Decodes one record (or the metadata) with a fresh node budget and pointer cache. */
+    private function decodeRoot(int $offset, int $base): mixed
+    {
+        $this->budget = self::MAX_NODES;
+        $this->ptrCache = [];
+        try {
+            return $this->decode($offset, $base)[0];
+        } finally {
+            $this->ptrCache = [];
+        }
     }
 
     private function readNode(int $node, int $index): int
@@ -186,6 +220,9 @@ final class MmdbReader
         if ($depth > 64) {
             throw new \RuntimeException("{$this->file}: data nesting too deep");
         }
+        if (--$this->budget < 0) {
+            throw new \RuntimeException("{$this->file}: data record too large (more than " . self::MAX_NODES . ' values)');
+        }
         $ctrl = ord($this->read($offset, 1));
         $offset++;
         $type = $ctrl >> 5;
@@ -206,7 +243,21 @@ final class MmdbReader
                 default:
                     $p = (int) unpack('N', $b)[1];
             }
-            [$value] = $this->decode($base + $p, $base, $depth + 1);
+            $target = $base + $p;
+            if (isset($this->ptrCache[$target])) {
+                [$value, $nodes] = $this->ptrCache[$target];
+                $this->budget -= $nodes;
+                if ($this->budget < 0) {
+                    throw new \RuntimeException("{$this->file}: data record too large (more than " . self::MAX_NODES . ' values)');
+                }
+                return [$value, $offset + $ss + 1];
+            }
+            if ((ord($this->read($target, 1)) >> 5) === 1) {
+                throw new \RuntimeException("{$this->file}: invalid pointer to a pointer at $offset");
+            }
+            $left = $this->budget;
+            [$value] = $this->decode($target, $base, $depth + 1);
+            $this->ptrCache[$target] = [$value, $left - $this->budget];
             return [$value, $offset + $ss + 1];
         }
         if ($type === 0) {

@@ -15,7 +15,7 @@ Order matters; the first rule that matches wins.
 | `error`      | status ≥ 400                                                                                           | hits/bytes; `daily.errors_4xx` or `errors_5xx`; dim `status`; 404 → dim `not_found` (path) and `not_found_referrer` (`path ← referrer_host`); 5xx → dim `server_error` (path) |
 | `redirect`   | status 301/302/303/307/308                                                                             | hits/bytes; dim `status`; belongs to the visit but is not a pageview |
 | `download`   | status 200/206 and extension in download list (`pdf zip rar 7z gz tgz bz2 xz dmg exe msi apk deb rpm iso doc docx xls xlsx ppt pptx odt ods csv mp3 mp4 m4a mov avi mkv wav flac epub mobi`) | hits/bytes; `daily.downloads`; dim `download` (path); counts toward the visit's hits, not pageviews |
-| `static`     | extension in static list (`css js mjs map png jpg jpeg gif webp avif svg ico bmp tif tiff woff woff2 ttf otf eot json xml txt webmanifest`) or path starts with `/wp-content/uploads/`, `/wp-includes/`, `/wp-json/` (configurable `static_prefixes`) | hits/bytes; dim `file_type`; dim `static_file` (top assets by bandwidth) |
+| `static`     | extension in static list (`css js mjs map png jpg jpeg gif webp avif svg ico bmp tif tiff woff woff2 ttf otf eot json xml txt webmanifest`) or path starts with one of the `static_prefixes` (default `/wp-content/uploads/`, `/wp-includes/`, `/wp-json/`, `/wp-admin/admin-ajax.php`, `/wp-cron.php`, `/xmlrpc.php`) | hits/bytes; dim `file_type`; dim `static_file` (top assets by bandwidth) |
 | `pageview`   | method GET or POST, status 200, 203, 206 or 304, everything else                                      | pageviews + hits/bytes; all page dims |
 | `other`      | anything left (e.g. 1xx, 2xx with unknown method)                                                      | hits/bytes; dim `status`, `method` |
 
@@ -44,6 +44,10 @@ again in the UI only where needed for links.
   midnight. Visits are closed when the gap since their last hit exceeds the
   timeout *at the time the collector runs*; a visit still open is counted as a
   visit already (visit-level counters are incremented at the first hit).
+  Safety cap: at most `max_open_visits` (50 000) visits of a domain are open at
+  once; beyond it the visits idle the longest are closed early (normally, with
+  all their counters), so a visitor returning to one of them starts a new
+  visit. Only floods of distinct visitors within one timeout reach the cap.
 * **Unique visitors** (`daily.visitors`) = number of distinct visitor hashes
   with at least one visit that day (`visitor_day` table, pruned after 2 days).
   Over a range the dashboard sums the daily values (same approximation Matomo

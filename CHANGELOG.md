@@ -4,9 +4,7 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-16
 
 First public version.
 
@@ -30,4 +28,23 @@ First public version.
 - Continuous integration on PHP 8.1 and 8.3 (`make test`, shellcheck).
 
 [Unreleased]: https://github.com/inalto/webpulse/compare/v0.1.0...HEAD
+
+### Security
+- WHM `admin.set_domain`, `admin.run` and `admin.purge` only accept a domain of the account; the collector reads
+  shared domlog directories (no `{user}`) and a shared archive directory only for domains cPanel lists for the
+  account, and the global collect re-syncs each account right before collecting it.
+- Open visits are capped per domain (`max_open_visits`, default 50 000; the oldest are closed early with their
+  counters); stored visits beyond the cap or already stale are closed in batches instead of being loaded; the
+  global collect runs every account in its own child process.
+- `settings.json` and archives are opened non-blocking and checked with `fstat` (a FIFO cannot hang the
+  collector); gzip archives are inflated in small slices with an output budget.
+- `webpulse serve` requires a random token (cookie after the first load), checks the Host header and refuses to
+  run as root without `--allow-root`.
+- MaxMind DB decoding is bounded (node budget, no pointer-to-pointer, metadata validated first); `geoip-update`
+  streams to disk with a 64 MiB cap and follows at most one redirect, to https.
+- `Fs::removeTree` never follows symlinks and leaves account-owned directories to `rm -rf --one-file-system`.
+- `admin.run` refuses duplicate jobs and more than 3 running jobs (409) and no longer returns the command line;
+  resellers no longer read global settings; log messages are sanitised; `\z` anchors in name validation and a
+  single account-name rule.
+
 [0.1.0]: https://github.com/inalto/webpulse/releases/tag/v0.1.0

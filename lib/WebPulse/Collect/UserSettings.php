@@ -75,21 +75,13 @@ final class UserSettings
             $error = 'settings.json is larger than 64 KiB';
             return self::defaults();
         }
-        $fh = @fopen($file, 'rb');
-        if ($fh === false) {
-            $error = 'settings.json is not readable';
-            return self::defaults();
-        }
-        $fst = fstat($fh);
-        if ($fst === false || $fst['ino'] !== $st['ino'] || $fst['dev'] !== $st['dev']) {
-            fclose($fh);
-            $error = 'settings.json changed while reading';
-            return self::defaults();
-        }
-        $raw = (string) fread($fh, self::MAX_BYTES + 1);
-        fclose($fh);
-        if (strlen($raw) > self::MAX_BYTES) {
-            $error = 'settings.json is larger than 64 KiB';
+        // The account may swap the file (even for a FIFO) between lstat() and
+        // the open: non-blocking open + fstat() identity check + bounded read.
+        try {
+            $raw = Fs::readRegular($file, self::MAX_BYTES, $st);
+        } catch (\RuntimeException $e) {
+            $error = str_contains($e->getMessage(), 'larger than') ? 'settings.json is larger than 64 KiB'
+                : (str_contains($e->getMessage(), 'cannot open') ? 'settings.json is not readable' : 'settings.json changed while reading');
             return self::defaults();
         }
         try {
@@ -119,7 +111,7 @@ final class UserSettings
         $out = self::defaults();
         foreach (array_keys($raw) as $k) {
             if (!in_array($k, ['version', 'domains', 'ui'], true)) {
-                $errors[] = "unknown key '$k'";
+                $errors[] = "unknown key '" . self::printable($k) . "'";
             }
         }
         if (isset($raw['version']) && $raw['version'] !== 1) {
@@ -148,7 +140,7 @@ final class UserSettings
             $dc = self::domainDefaults();
             foreach (array_keys($cfg) as $k) {
                 if (!in_array($k, ['timezone', 'exclude_ips', 'exclude_paths'], true)) {
-                    $errors[] = "$d: unknown key '$k'";
+                    $errors[] = "$d: unknown key '" . self::printable($k) . "'";
                 }
             }
             $tz = $cfg['timezone'] ?? null;
@@ -193,7 +185,7 @@ final class UserSettings
         }
         foreach (array_keys($ui) as $k) {
             if (!in_array($k, ['default_range', 'dark'], true)) {
-                $errors[] = "ui: unknown key '$k'";
+                $errors[] = "ui: unknown key '" . self::printable($k) . "'";
             }
         }
         if (isset($ui['default_range'])) {
@@ -221,6 +213,12 @@ final class UserSettings
         }
         ksort($out['domains']);
         return $out;
+    }
+
+    /** A user-supplied key made safe for messages and logs (no control characters, ≤ 64 bytes). */
+    private static function printable(int|string $k): string
+    {
+        return \WebPulse\Util\Str::truncate(\WebPulse\Util\Str::clean((string) $k), 64, "\u{2026}");
     }
 
     /**

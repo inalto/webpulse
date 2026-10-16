@@ -20,8 +20,9 @@ use WebPulse\Paths;
  */
 final class DomainResolver
 {
-    public const DOMAIN_RE = '/^[a-z0-9.-]{1,253}$/';
-    public const USER_RE = '/^[a-z0-9_][a-z0-9_.-]{0,31}$/';
+    public const DOMAIN_RE = '/^[a-z0-9.-]{1,253}\z/';
+    /** Same rule as the engine (Paths::USER_RE): one definition of a valid account name. */
+    public const USER_RE = Paths::USER_RE;
 
     public static function validDomain(string $d): bool
     {
@@ -30,7 +31,7 @@ final class DomainResolver
 
     public static function validUser(string $u): bool
     {
-        return preg_match(self::USER_RE, $u) === 1 && !str_contains($u, '..');
+        return Paths::isValidUser($u);
     }
 
     /**

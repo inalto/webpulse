@@ -6,7 +6,7 @@ server root under `tests/fixtures/fakeroot/`.
 ```bash
 make test          # php -l on every file + unit/integration tests (tests/run.php)
 make fixtures      # regenerate deterministic sample logs (tests/gen_logs.php, seed 42)
-make serve         # collect fixtures into tests/tmp and open the dashboard on http://127.0.0.1:8099
+make serve         # collect fixtures into tests/tmp and serve the dashboard on http://127.0.0.1:8099/?token=… (URL printed)
 make serve-admin   # same, with the WHM admin principal
 make dist          # build dist/webpulse-<version>.tar.gz (what install.sh downloads for a tag)
 make lint          # php -l + basic JS syntax check with node --check
@@ -30,8 +30,8 @@ docs/                        this documentation
 
 ## Running without cPanel
 
-`WEBPULSE_CONFIG=tests/tmp/config.json bin/webpulse collect` — the test
-runner writes a config whose `paths` point into `tests/tmp/fakeroot`. The
+`WEBPULSE_CONFIG=tests/tmp/dev/config.json bin/webpulse collect` — `make fixtures`
+writes a config whose `paths` point into `tests/tmp/dev/root`. The
 fake root contains:
 
 ```
@@ -47,6 +47,20 @@ home/alice/logs/example.com-Sep-2026.gz
 `Page::render()` at `/` and `Api::dispatch()` at `/api`, with a `user`
 principal; `--admin` gives the root principal; `--reseller reseller1` a
 reseller.
+
+The dev server is not open to anyone who can reach 127.0.0.1. At start it
+prints a URL with a random access token:
+
+```
+WebPulse dev server: http://127.0.0.1:8099/?token=3f9c…  (principal user:alice, config …)
+```
+
+Open that URL: the first page load trades `?token=` for an `HttpOnly`,
+`SameSite=Strict` cookie and redirects to `/`; every later request (page and
+`/api`) must carry the cookie or an `X-WebPulse-Dev-Token: <token>` header
+(handy for `curl`). Requests whose `Host` is not `127.0.0.1:PORT` or
+`localhost:PORT` are refused (DNS rebinding). A new token is generated at
+every start. `serve` refuses to run as root unless `--allow-root` is given.
 
 ## Test runner
 

@@ -28,6 +28,8 @@ final class Config
         'exclude_ips' => [],
         'exclude_paths' => ['/.well-known/', '/cpanel', '/whm', '/webmail', '/cgi-sys/'],
         'count_head_requests' => false,
+        // engine safety cap: visits kept open in memory per domain (the oldest are closed early beyond it)
+        'max_open_visits' => 50000,
         'static_prefixes' => ['/wp-content/uploads/', '/wp-includes/', '/wp-json/', '/wp-admin/admin-ajax.php', '/wp-cron.php', '/xmlrpc.php'],
         'geoip' => [
             'enabled' => false,
@@ -229,7 +231,7 @@ final class Config
             throw new \InvalidArgumentException("setting '$key' cannot be changed at run time (edit config.json)");
         }
         $int = static function (mixed $v, int $min, int $max) use ($key): int {
-            if (is_string($v) && preg_match('/^-?\d+$/', $v)) {
+            if (is_string($v) && preg_match('/^-?\d+\z/', $v)) {
                 $v = (int) $v;
             }
             if (!is_int($v) || $v < $min || $v > $max) {

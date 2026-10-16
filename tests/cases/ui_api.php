@@ -296,7 +296,7 @@ return [
         $env = SeedDb::fresh('ui-run');
         $r = $ok(SeedDb::api($env, 'admin', ['a' => 'admin.run'], ['type' => 'rollup']), 'admin.run');
         T::true(is_int($r['job_id']) && $r['job_id'] > 13, 'job id');
-        T::contains("'rollup' '--job' '" . $r['job_id'] . "'", $r['command']);
+        T::eq(['job_id'], array_keys($r), 'only the job id is returned (no command line)');
         $deadline = microtime(true) + 20;
         $status = 'running';
         while (microtime(true) < $deadline) {

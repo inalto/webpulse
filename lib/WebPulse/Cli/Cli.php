@@ -119,7 +119,7 @@ final class Cli
         } catch (UsageException $e) {
             return $this->usageError($e->getMessage() . "\n\n" . $cls::usage());
         } catch (\Throwable $e) {
-            $this->err('error: ' . $e->getMessage());
+            $this->err('error: ' . \WebPulse\Log::sanitize($e->getMessage()));
             if ($this->app !== null) {
                 $this->app->log->error("$name failed: " . $e->getMessage(), ['at' => $e->getFile() . ':' . $e->getLine()]);
             }

@@ -118,12 +118,16 @@ return [
         $envv['WEBPULSE_CONFIG'] = $env['config'];
         $envv['WEBPULSE_DEV_PRINCIPAL'] = 'user:alice';
         $envv['WEBPULSE_NOW'] = (string) $env['now'];
+        $token = bin2hex(random_bytes(16));
+        $envv['WEBPULSE_DEV_TOKEN'] = $token;
+        $envv['WEBPULSE_DEV_PORT'] = (string) $port;
         $proc = proc_open([PHP_BINARY, '-S', "127.0.0.1:$port", $repo . '/lib/WebPulse/Dev/serve_router.php'],
             [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, $repo, $envv);
         try {
-            $get = static function (string $path) use ($port): array {
+            $get = static function (string $path, array $headers = []) use ($port): array {
                 for ($i = 0; $i < 50; $i++) {
-                    $ctx = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 5]]);
+                    $ctx = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 5, 'follow_location' => 0,
+                        'header' => implode("\r\n", $headers)]]);
                     $body = @file_get_contents("http://127.0.0.1:$port$path", false, $ctx);
                     if ($body !== false) {
                         return [$http_response_header[0] ?? '', $body, $http_response_header];
@@ -132,15 +136,34 @@ return [
                 }
                 throw new RuntimeException('dev server did not start');
             };
-            [$st, $html] = $get('/');
+            $cookie = 'Cookie: webpulse_dev=' . $token;
+            // no token: refused everywhere
+            T::contains('403', $get('/')[0]);
+            T::contains('403', $get('/api?a=domains')[0]);
+            T::contains('403', $get('/?token=' . str_repeat('0', 32))[0], 'wrong token');
+            // the token in the URL sets the cookie and redirects to /
+            [$st, , $hdrs] = $get('/?token=' . $token);
+            T::contains('303', $st);
+            $set = implode("\n", array_filter($hdrs, static fn ($h) => stripos($h, 'Set-Cookie:') === 0));
+            T::contains("webpulse_dev=$token", $set);
+            T::contains('SameSite=Strict', $set);
+            T::contains('HttpOnly', $set);
+            [$st, $html] = $get('/', [$cookie]);
             T::contains('200', $st);
             T::contains('window.WEBPULSE', $html);
-            [$st, $json] = $get('/api?a=report&name=page&domain=example.com&limit=2');
+            T::contains('403', $get('/api?a=domains', ["Cookie: webpulse_dev=x$token"])[0], 'wrong cookie');
+            [$st, $json] = $get('/api?a=report&name=page&domain=example.com&limit=2', [$cookie]);
             T::contains('200', $st);
             T::eq('page', json_decode($json, true)['data']['name']);
-            [$st] = $get('/api?a=overview&domain=blog.net');
+            [$st] = $get('/api?a=domains', ['X-WebPulse-Dev-Token: ' . $token]);
+            T::contains('200', $st, 'header instead of the cookie');
+            // DNS rebinding: a foreign Host header is refused even with the token
+            T::contains('403', $get('/api?a=domains', [$cookie, "Host: evil.example:$port"])[0], 'foreign Host');
+            [$st] = $get('/api?a=domains', [$cookie, "Host: localhost:$port"]);
+            T::contains('200', $st, 'localhost Host');
+            [$st] = $get('/api?a=overview&domain=blog.net', [$cookie]);
             T::contains('404', $st);
-            [$st] = $get('/../config.json');
+            [$st] = $get('/../config.json', [$cookie]);
             T::contains('404', $st);
         } finally {
             proc_terminate($proc);

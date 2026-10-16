@@ -32,6 +32,7 @@ fixtures:
 $(DEVCFG):
 	$(PHP) tests/support/devenv.php dev
 
+# serve / serve-admin print http://127.0.0.1:$(PORT)/?token=… — open that URL (the token is required)
 serve: $(DEVCFG)
 	WEBPULSE_CONFIG=$(DEVCFG) $(PHP) bin/webpulse serve --port $(PORT) --user alice
 

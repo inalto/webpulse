@@ -51,7 +51,7 @@ final class Referrer
             return null;
         }
         $host = strtolower(rtrim($m[2], '.'));
-        if ($host === '' || !preg_match('/^[a-z0-9._-]+$/', $host)) {
+        if ($host === '' || !preg_match('/^[a-z0-9._-]+\z/', $host)) {
             return null;
         }
         if (str_starts_with($host, 'www.')) {

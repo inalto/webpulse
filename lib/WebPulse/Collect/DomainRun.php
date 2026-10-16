@@ -60,6 +60,7 @@ final class DomainRun
 
     /**
      * @param array{timezone:?string,exclude_ips:string[],exclude_paths:string[]} $domainSettings
+     * @param int|null $watermark persistent mode: stored visits stale at this timestamp are closed while loading
      */
     public function __construct(
         private DomainStore $store,
@@ -73,15 +74,18 @@ final class DomainRun
         private GeoIp $geo,
         \Closure $salt,
         bool $persistent,
+        ?int $watermark = null,
     ) {
         $this->clock = new DayClock($timezone);
         $this->counters = new Counters();
         $timeout = max(60, (int) ($config['session_timeout_min'] ?? 30) * 60);
+        $maxOpen = (int) ($config['max_open_visits'] ?? Sessionizer::DEFAULT_MAX_OPEN);
         $next = (int) ($store->getMeta('next_visit_id') ?? 1);
         $maxId = (int) $store->pdo()->query('SELECT MAX(id) FROM (SELECT MAX(visit_id) AS id FROM visits UNION ALL SELECT MAX(visit_id) FROM open_visits)')->fetchColumn();
-        $this->sessions = new Sessionizer($this->counters, $this->clock, $salt, $timeout, max($next, $maxId + 1), $store->pdo());
+        $this->sessions = new Sessionizer($this->counters, $this->clock, $salt, $timeout, max($next, $maxId + 1), $store->pdo(),
+            $maxOpen > 0 ? $maxOpen : Sessionizer::DEFAULT_MAX_OPEN);
         if ($persistent) {
-            $this->sessions->load($store->pdo());
+            $this->sessions->load($store->pdo(), $watermark);
         }
         $this->excludeIps = Ip::compile(array_merge((array) ($config['exclude_ips'] ?? []), $domainSettings['exclude_ips']));
         $this->excludePaths = array_values(array_filter(array_merge((array) ($config['exclude_paths'] ?? []), $domainSettings['exclude_paths']), 'is_string'));

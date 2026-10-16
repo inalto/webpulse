@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | b
 Pass flags after `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | bash -s -- --geoip --ref v0.1.0
+curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | bash -s -- --geoip --ref v0.1.0   # once the tag exists; use a branch name otherwise
 ```
 
 From a checkout or an unpacked release the same script installs the code it
@@ -132,8 +132,9 @@ plugin files are refreshed. Configuration and statistics are never modified, the
 disk (last three are kept) and is restored automatically if the update fails half-way. Running `--update`
 twice is harmless.
 
-Roll back by hand: `ln -sfn /usr/local/webpulse-releases/<old> /usr/local/webpulse` (and rerun the install
-of that release to refresh the plugin copies).
+Roll back by hand: `ln -sfn /usr/local/webpulse-releases/<old> /usr/local/webpulse`, then refresh the
+plugin copies with `WEBPULSE_REF=<old tag> bash install.sh --update` (the installer always downloads
+the requested ref; running it from inside a release directory does not reinstall that directory).
 
 ## Uninstall
 

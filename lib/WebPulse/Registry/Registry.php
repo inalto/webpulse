@@ -475,6 +475,52 @@ final class Registry
         return $id;
     }
 
+    /**
+     * Jobs in state "running" started at or after $since (older ones are
+     * presumed dead: a crashed process never finishes its row).
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function runningJobs(int $since): array
+    {
+        $st = $this->pdo->prepare("SELECT id, type, scope, started_at FROM jobs WHERE status = 'running' AND started_at >= ? ORDER BY id");
+        $st->execute([$since]);
+        $out = [];
+        foreach ($st->fetchAll(\PDO::FETCH_ASSOC) as $r) {
+            $out[] = ['id' => (int) $r['id'], 'type' => (string) $r['type'], 'scope' => $r['scope'] === null ? null : (string) $r['scope'],
+                'started_at' => (int) $r['started_at']];
+        }
+        return $out;
+    }
+
+    /**
+     * Atomically starts a job unless the same type and scope is already
+     * running or $max jobs are running (only jobs started since $since count).
+     *
+     * @throws \OverflowException with a user-facing message when refused
+     */
+    public function startJobLimited(string $type, string $scope, int $since, int $max): int
+    {
+        $this->pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $running = $this->runningJobs($since);
+            foreach ($running as $j) {
+                if ($j['type'] === $type && $j['scope'] === $scope) {
+                    throw new \OverflowException("A $type job for this scope is already running (#{$j['id']})");
+                }
+            }
+            if (count($running) >= $max) {
+                throw new \OverflowException('Too many jobs are running; try again when one has finished');
+            }
+            $id = $this->startJob($type, $scope);
+            $this->pdo->exec('COMMIT');
+            return $id;
+        } catch (\Throwable $e) {
+            $this->pdo->exec('ROLLBACK');
+            throw $e;
+        }
+    }
+
     /** Marks a job running again (used when the CLI adopts a job created by the UI). */
     public function touchJob(int $id): void
     {

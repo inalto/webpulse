@@ -275,8 +275,8 @@ final class FakeRoot
         if (!str_starts_with($dir, self::repo() . '/tests/tmp/')) {
             throw new \LogicException("refusing to delete $dir");
         }
-        if (is_link($dir) || is_file($dir)) {
-            unlink($dir);
+        if (is_link($dir) || (file_exists($dir) && !is_dir($dir))) {
+            unlink($dir); // files, symlinks, FIFOs
             return;
         }
         if (!is_dir($dir)) {

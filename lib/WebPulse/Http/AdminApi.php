@@ -22,6 +22,10 @@ final class AdminApi
     ];
 
     public const JOB_TYPES = ['collect', 'backfill', 'rollup'];
+    /** Jobs started from WHM that may run at the same time. */
+    public const MAX_RUNNING_JOBS = 3;
+    /** A job still "running" after this many seconds is considered dead (crashed without finishing). */
+    public const JOB_STALE_SECONDS = 6 * 3600;
 
     /**
      * @return array<string,mixed>
@@ -259,6 +263,45 @@ final class AdminApi
         return $user;
     }
 
+    /**
+     * Validates `domain` from a body and checks that it belongs to $user
+     * (404 otherwise): a live registry row of the account, a domain cPanel
+     * lists for it (/var/cpanel/users, /etc/userdomains) or an existing
+     * database in its data directory. A syntactically valid name alone is not
+     * enough — it would let a reseller register (and get collected) a domain
+     * of another tenant whose logs live in a shared domlog directory.
+     */
+    private static function ownedDomain(App $app, string $user, mixed $domain): string
+    {
+        if (!is_string($domain) || !DomainResolver::validDomain(strtolower($domain))) {
+            throw ApiError::badRequest('Invalid domain');
+        }
+        $domain = strtolower($domain);
+        if (!self::belongsTo($app, $user, $domain)) {
+            throw ApiError::notFound('Unknown domain');
+        }
+        return $domain;
+    }
+
+    /** True when $domain is a domain of $user (see ownedDomain()). */
+    public static function belongsTo(App $app, string $user, string $domain): bool
+    {
+        try {
+            foreach ($app->registry()->domains($user) as $d) {
+                if ($d['domain'] === $domain && $d['removed_at'] === null) {
+                    return true;
+                }
+            }
+        } catch (\Throwable) {
+            // registry unreadable: fall back to cPanel data and databases
+        }
+        if (isset($app->cpanelUsers()->domainsOf($user)[$domain])) {
+            return true;
+        }
+        $db = $app->paths->domainDb($user, $domain);
+        return is_file($db) && !is_link($db);
+    }
+
     /** `true|false|null` (key required). */
     private static function tri(array $body): ?bool
     {
@@ -289,10 +332,7 @@ final class AdminApi
     {
         $b = $r->json();
         $user = self::scopedUser($p, $b['user'] ?? null);
-        $domain = $b['domain'] ?? null;
-        if (!is_string($domain) || !DomainResolver::validDomain($domain)) {
-            throw ApiError::badRequest('Invalid domain');
-        }
+        $domain = self::ownedDomain($app, $user, $b['domain'] ?? null);
         $enabled = self::tri($b);
         $app->registry()->setDomain($user, $domain, $enabled);
         foreach ($app->registry()->domains($user) as $d) {
@@ -308,6 +348,9 @@ final class AdminApi
      */
     private static function settings(App $app, Principal $p): array
     {
+        if (!$p->isAdmin()) {
+            throw ApiError::forbidden('Only the server administrator can see global settings');
+        }
         $values = [];
         foreach (self::SETTINGS as $k) {
             $values[$k] = $app->config->get($k);
@@ -346,8 +389,10 @@ final class AdminApi
 
     /**
      * Spawns `bin/webpulse <type> … --job` detached and returns the job id.
+     * Refused (409) when the same job (type and scope) is already running or
+     * when MAX_RUNNING_JOBS jobs are running.
      *
-     * @return array{job_id:int|null,command:string}
+     * @return array{job_id:int}
      */
     private static function run(App $app, Request $r, Principal $p): array
     {
@@ -364,9 +409,10 @@ final class AdminApi
             $user = null;
         }
         if ($domain !== null && $domain !== '') {
-            if (!is_string($domain) || !DomainResolver::validDomain($domain) || $user === null) {
+            if (!is_string($domain) || !DomainResolver::validDomain(strtolower($domain)) || $user === null) {
                 throw ApiError::badRequest('"domain" requires a valid "user"');
             }
+            $domain = self::ownedDomain($app, $user, $domain);
         } else {
             $domain = null;
         }
@@ -381,7 +427,11 @@ final class AdminApi
         }
 
         $scope = $user === null ? 'all' : ($domain === null ? $user : "$user/$domain");
-        $jobId = $app->registry()->startJob($type, $scope);
+        try {
+            $jobId = $app->registry()->startJobLimited($type, $scope, App::clock() - self::JOB_STALE_SECONDS, self::MAX_RUNNING_JOBS);
+        } catch (\OverflowException $e) {
+            throw new ApiError(409, 'conflict', $e->getMessage());
+        }
         $args = [$type, '--job', (string) $jobId, '--quiet'];
         if ($user !== null) {
             array_push($args, '--user', $user);
@@ -393,12 +443,11 @@ final class AdminApi
         if ($cfg !== null && is_file($cfg)) {
             array_push($args, '--config', $cfg);
         }
-        $cmd = JobRunner::spawn($app, $args);
-        if ($cmd === null) {
+        if (JobRunner::spawn($app, $args) === null) {
             $app->registry()->finishJob($jobId, 'error', [], 'could not start the job process');
             throw new ApiError(500, 'spawn_failed', 'Could not start the job');
         }
-        return ['job_id' => $jobId, 'command' => $cmd];
+        return ['job_id' => $jobId];
     }
 
     /**
@@ -442,9 +491,7 @@ final class AdminApi
         $domain = $b['domain'] ?? null;
         $dataDir = realpath($app->paths->dataDir());
         if ($domain !== null && $domain !== '') {
-            if (!is_string($domain) || !DomainResolver::validDomain($domain)) {
-                throw ApiError::badRequest('Invalid domain');
-            }
+            $domain = self::ownedDomain($app, $user, $domain);
             $files = [$app->paths->domainDb($user, $domain)];
         } else {
             $domain = null;
