@@ -1,0 +1,7 @@
+/tests/tmp/
+/tests/fixtures/geoip/*.mmdb
+/dist/
+*.db
+*.db-journal
+*.log
+.DS_Store

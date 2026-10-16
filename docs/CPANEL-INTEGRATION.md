@@ -1,0 +1,160 @@
+# cPanel & WHM integration
+
+Verified against the cPanel developer documentation (api.docs.cpanel.net,
+docs.cpanel.net) on 2026-10-16. Where the docs were silent, the behaviour is
+marked *assumed* and the installer verifies it at run time and prints a clear
+error instead of guessing.
+
+## Access logs
+
+* Location: `/etc/apache2/logs/domlogs/<user>/<domain>` and
+  `<domain>-ssl_log` (cPanel 11.60+ with EA4; `/usr/local/apache/domlogs` is a
+  symlink on older systems; `/var/log/apache2/domlogs` is another symlink).
+  With ea-nginx in standalone mode logs are in `/var/log/nginx/domains/`.
+  Discovery searches all configured `domlogs_dirs`.
+* Format: Apache `combined`
+  (`%h %l %u %t "%r" %>s %b "%{Referer}i" "%{User-Agent}i"`), local time with
+  numeric offset. `%b` is `-` for zero bytes.
+* Permissions: files are `0640 root:<user>` ("Apache log file chmod value",
+  default 0640). The collector runs as root.
+* Lifecycle (WHM » Tweak Settings » Stats and Logs):
+  * "Delete each domain's access logs after statistics are gathered" (default
+    **On**): `cpanellogd` truncates the domlog after each stats run (every 24 h
+    by default, "Stats cycle"). That is why the collector runs every 5 minutes
+    *and* hooks `Stats::RunUser` (pre) to drain the file right before the run.
+  * "Archive logs in the user's home directory at the end of each stats run"
+    (default On): compressed copies land in `/home/<user>/logs/` as
+    `<domain>-<Mon>-<YYYY>.gz` and `<domain>-ssl_log-<Mon>-<YYYY>.gz`
+    (*assumed naming; the backfill command accepts any `*.gz` in that directory
+    whose name starts with a known domain and never imports the same file twice*).
+  * "Remove the previous month's archived logs" (default On).
+* Rotation: cPanel does **not** use logrotate for domlogs; truncation is the
+  only event. The checkpoint logic (inode + offset + size + first-line hash)
+  handles truncation, replacement and manual `> file`.
+
+## cPanel plugin (account dashboard)
+
+Files are copied by our installer (the `install_plugin` script "does not
+extract the plugin from the archive"; it only reads `install.json`):
+
+```
+/usr/local/cpanel/base/frontend/jupiter/webpulse/
+    index.live.php      dashboard page (LiveAPI PHP)
+    api.live.php        JSON API
+    webpulse.svg        48×48 icon (also referenced by install.json)
+    lib -> /usr/local/webpulse/lib   (NOT a symlink: copied by the installer for
+                                      robustness; `webpulse update` re-copies)
+```
+`install.json` (in `/usr/local/webpulse/cpanel/plugin/`, together with the icon):
+```json
+[{"id":"webpulse","name":"WebPulse Analytics","description":"Visitor statistics generated from your access logs",
+  "uri":"webpulse/index.live.php","icon":"webpulse.svg","group_id":"metrics","order":1,
+  "type":"link","featuremanager":1,"feature":"webpulse"}]
+```
+Register / unregister:
+```
+/usr/local/cpanel/scripts/install_plugin   /usr/local/webpulse/cpanel/plugin --theme jupiter
+/usr/local/cpanel/scripts/uninstall_plugin /usr/local/webpulse/cpanel/plugin --theme jupiter
+```
+`featuremanager: 1` adds a "WebPulse Analytics" feature to WHM » Feature
+Manager, so hosts can hide the icon per package. Collection is governed
+separately by the WHM plugin switches.
+
+LiveAPI usage in `index.live.php` / `api.live.php`:
+```php
+require_once '/usr/local/cpanel/php/cpanel.php';
+$cpanel = new CPANEL();                       // connects to cpsrvd; one per request
+$info   = $cpanel->uapi('Variables', 'get_user_information', ['name' => 'user']);
+$user   = $info['cpanelresult']['result']['data']['user'] ?? getenv('REMOTE_USER');
+$dom    = $cpanel->uapi('DomainInfo', 'list_domains');   // main_domain, addon_domains[], parked_domains[], sub_domains[]
+print $cpanel->header('WebPulse Analytics');  // Jupiter chrome (index page only)
+…
+print $cpanel->footer();
+$cpanel->end();
+```
+The LiveAPI PHP runs **as the account user**; it may only read
+`/var/webpulse/data/<user>/` (group-readable) and write
+`/var/webpulse/data/<user>/user/` (owned by the user). `uapi()` return shapes
+differ slightly between versions (array vs object); `LiveApiUser::resolve()`
+must accept both and fall back to `getenv('REMOTE_USER')`, then to
+`posix_getpwuid(posix_geteuid())['name']`.
+
+## WHM plugin (administrator)
+
+```
+/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/index.cgi    #!/usr/local/cpanel/3rdparty/bin/php
+/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/api.cgi
+/usr/local/cpanel/whostmgr/docroot/addon_plugins/webpulse.png  48×48 transparent PNG
+/var/cpanel/apps/webpulse.conf
+```
+`index.cgi` header lines (first lines after the shebang, as comments):
+```
+#WHMADDON:webpulse:WebPulse Analytics:webpulse.png
+#ACLS:all
+```
+AppConfig `webpulse.conf`:
+```
+name=webpulse
+service=whostmgr
+url=/cgi/webpulse/index.cgi
+url2=/cgi/webpulse/api.cgi
+user=root
+acls=all,list-accts
+displayname=WebPulse Analytics
+entryurl=webpulse/index.cgi
+icon=webpulse.png
+target=_self
+searchtext=analytics statistics visitors logs awstats webalizer
+```
+Register / unregister (cpsrvd picks up the change on restart; the installer
+runs `/scripts/restartsrv_cpsrvd` only if registration reports it is needed):
+```
+/usr/local/cpanel/bin/register_appconfig   /usr/local/webpulse/whm/webpulse.conf
+/usr/local/cpanel/bin/unregister_appconfig webpulse
+```
+The CGI runs as root. It prints `Content-Type: text/html\r\n\r\n` then the
+SPA; WHM shows it inside its own frame so no WHM master template is needed.
+Caller identity: `getenv('REMOTE_USER')`; `root` → admin principal; otherwise
+the user is a reseller → `reseller` principal whose visible accounts are those
+with `OWNER=<reseller>` in `/var/cpanel/users/<account>` (root is also the
+owner of its own accounts). Anything else → 403.
+
+## Standardized hook — drain logs before stats
+
+`Stats::RunUser` (stage `pre`) runs **as the cPanel user** right before
+`cpanellogd` processes (and then truncates/archives) that user's domlogs.
+Because it runs unprivileged, the hook script cannot write our root-owned
+databases; it therefore only *requests* a run: it writes a flag file
+`/var/webpulse/run/hook/<user>` (dir is 1777) and the collector's cron, which
+runs every minute in "hook mode" (`webpulse collect --hooked`, cheap no-op when
+no flags exist), drains those users within ≤ 60 s. `cpanellogd` itself takes
+longer than that to process a user's logs, so the window is covered in
+practice; additionally `Stats::RunAll` (stage `pre`, runs as **root**) triggers
+a full `webpulse collect` synchronously, which drains everything before the
+whole stats cycle starts. Both hooks are registered:
+```
+/usr/local/cpanel/bin/manage_hooks add script /usr/local/webpulse/hooks/stats_runall_pre.sh  --manual --category Stats --event RunAll  --stage pre
+/usr/local/cpanel/bin/manage_hooks add script /usr/local/webpulse/hooks/stats_runuser_pre.sh --manual --category Stats --event RunUser --stage pre
+/usr/local/cpanel/bin/manage_hooks delete script <path> --manual --category … --event … --stage pre
+```
+Hook scripts must answer `--describe` with a JSON array describing
+themselves (category/event/stage/hook/exectype) and read the JSON payload on
+STDIN (`{"context":{…},"data":{"user":"…", …}}`). `stats_runuser_pre.sh`
+reads `data.user`, validates `^[a-z0-9_][a-z0-9_-]{0,31}$`, and touches the
+flag. Both scripts exit 0 always (never block stats).
+
+## Cron — `/etc/cron.d/webpulse`
+```
+*/5 * * * * root /usr/local/webpulse/bin/webpulse collect --quiet
+*   * * * * root /usr/local/webpulse/bin/webpulse collect --hooked --quiet
+10  2 * * * root /usr/local/webpulse/bin/webpulse rollup --quiet
+30  4 1 * * root /usr/local/webpulse/bin/webpulse geoip-update --quiet
+```
+
+## Installer checks
+`install.sh` refuses to run when not root, when `/usr/local/cpanel/cpanel` is
+missing (unless `--standalone`, which installs only CLI + dev server), when
+no PHP ≥ 8.1 with `pdo_sqlite` is found (tries
+`/usr/local/cpanel/3rdparty/bin/php`, then `php` in PATH), and prints the
+exact command that failed when any cPanel registration step fails, leaving
+the system consistent (it uninstalls what it registered).
