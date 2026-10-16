@@ -1,0 +1,15 @@
+203.0.113.5 - - [10/Oct/2026:13:55:36 +0200] "GET /pricing?utm_source=news&utm_medium=email HTTP/1.1" 200 2326 "https://mail.google.com/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+example.com:443 2001:db8:85a3::8a2e:370:7334 - - [10/Oct/2026:13:55:37 +0200] "GET / HTTP/2.0" 200 5120 "-" "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+example.com 198.51.100.7 - - [10/Oct/2026:13:55:38 +0200] "GET /a HTTP/1.1" 304 - "-" "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0"
+198.51.100.8 - frank [10/Oct/2026:13:55:39 +0200] "GET /say \"hi\" HTTP/1.1" 404 196 "https://bing.com/search?q=x" "Agent with \"quotes\" inside"
+198.51.100.9 - - [10/Oct/2026:13:55:40 +0200] "\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03" 400 226 "-" "-"
+198.51.100.10 - - [10/Oct/2026:13:55:41 +0200] "-" 408 - "-" "-"
+198.51.100.11 - - [10/Oct/2026:13:55:42 +0200] "GET /no-ua HTTP/1.1" 200 12
+198.51.100.12 - - [10/Oct/2026:13:55:43 +0200] "GET /extra HTTP/1.1" 200 12 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" "203.0.113.99" 0.003
+198.51.100.13 - - [10/Oct/2026:13:55:44 +0200] "GET /caf%C3%A9/%E2%82%AC HTTP/1.1" 200 100 "-" "Mozilla/5.0 (Windows NT 10.0) Chrome/129.0"
+198.51.100.14 - - [10/Oct/2026:13:55:45 +0200] "GET /bin\xff\xfe HTTP/1.1" 200 100 "http://ref.example.org/\xc3\x28" "Mozilla/5.0 \xff\xfe garbage"
+this is not a log line
+198.51.100.15 - - [31/Feb/2026:13:55:45 +0200] "GET / HTTP/1.1" 200 100 "-" "Mozilla/5.0"
+198.51.100.16 - - [10/Oct/2026:25:55:45 +0200] "GET / HTTP/1.1" 200 100 "-" "Mozilla/5.0"
+198.51.100.17 - - [10/Oct/2026:13:55:46 +0200] "PROPFIND /dav HTTP/1.1" 207 0 "-" "Mozilla/5.0 (Windows NT 10.0) Chrome/129.0"
+198.51.100.18 - - [10/Oct/2026:13:55:47 -0700] "OPTIONS * HTTP/1.1" 200 0 "-" "Mozilla/5.0 (Windows NT 10.0) Chrome/129.0"
