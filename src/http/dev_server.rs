@@ -139,6 +139,12 @@ pub fn handle(
         return text(status, &format!("webpulse serve: {why}\n"));
     }
     if set_cookie {
+        // Drop the token from the address bar; keep the report's `noprint=1` switch.
+        let location = if req.query.get("noprint") == Some("1") {
+            "/?noprint=1"
+        } else {
+            "/"
+        };
         return Response::new(
             303,
             "text/plain; charset=utf-8",
@@ -148,7 +154,7 @@ pub fn handle(
                     "Set-Cookie".into(),
                     format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict"),
                 ),
-                ("Location".into(), "/".into()),
+                ("Location".into(), location.into()),
                 ("Cache-Control".into(), "no-store".into()),
             ],
         );

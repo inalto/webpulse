@@ -1054,6 +1054,14 @@ fn admin_actions() {
         .map(|d| d["domain"].as_str().unwrap())
         .collect();
     assert_eq!(top, vec!["example.com", "blog.net", "shop.example.com"]);
+    // `top` sizes the top-domains list (the server report asks for all of them)
+    for (n, want) in [("1", 1), ("0", 1), ("500", 3), ("x", 1)] {
+        let o = ok(
+            &api(&env, "admin", &[("a", "admin.overview"), ("top", n)], None),
+            "admin.overview top",
+        );
+        assert_eq!(o["top_domains"].as_array().unwrap().len(), want, "top={n}");
+    }
     let bs = o["bot_share_30d"].as_f64().unwrap();
     assert!(bs > 0.2 && bs < 0.6, "bot share plausible: {bs}");
     assert_eq!(o["collector"]["lag_seconds"], 200);

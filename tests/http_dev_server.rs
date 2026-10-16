@@ -143,6 +143,12 @@ fn dev_server_serves_page_and_api() {
     let r = get(p, &format!("/?token={}", s.token), &[]);
     assert_eq!(r.status, 303);
     assert_eq!(r.header("Location"), Some("/"));
+    let r2 = get(p, &format!("/?token={}&noprint=1", s.token), &[]);
+    assert_eq!(
+        r2.header("Location"),
+        Some("/?noprint=1"),
+        "the report's noprint switch survives the token redirect"
+    );
     let set = r.header("Set-Cookie").unwrap_or("");
     assert!(
         set.contains(&format!("webpulse_dev={}", s.token))
@@ -255,7 +261,7 @@ fn dev_server_admin_and_reseller() {
     let r = get(s.port, "/", &[format!("X-WebPulse-Dev-Token: {}", s.token)]);
     assert!(
         r.body
-            .contains("window.WebPulseAdmin = { render: render };")
+            .contains("window.WebPulseAdmin = { render: render, report: report };")
     );
 }
 

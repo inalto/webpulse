@@ -28,7 +28,7 @@ cargo build --release          # -> target/release/webpulse
 | `make fmt` | `cargo fmt`. |
 | `make fixtures` | Build `tests/tmp/dev/`: 45 days of generated sample logs (seed 42), a development config, then setup, collect, backfill and rollup, all with the Rust binary. |
 | `make serve` | Build the sample environment if needed and serve the dashboard on `127.0.0.1:8099` as the account `alice`. |
-| `make serve-admin` | Same, with the WHM administrator view (Server tab). |
+| `make serve-admin` | Same, with the WHM administrator view (server view). |
 | `make geoip-fixture` | Download the free DB-IP country database into `tests/fixtures/geoip/` (needs internet). The dev environment then shows countries; GeoIP tests are skipped without it. |
 | `make dist` | Build the source tarball `dist/webpulse-<version>.tar.gz` from a clean `git archive`. Needs git. |
 | `make release` | Build the binary tarball `dist/webpulse-<version>-<target>.tar.gz` and its `.sha256` (`TARGET=aarch64-unknown-linux-musl`, `ZIG=1` for `cargo zigbuild`). |

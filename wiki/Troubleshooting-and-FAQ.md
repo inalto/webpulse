@@ -117,7 +117,7 @@ ls -ld /var/webpulse/run/hook                                # drwxrwxrwt
 
 If one is missing, register it again (commands in [[Manual Installation]], step 5). If you see gaps in the
 data around the daily statistics time, check that both hooks are listed and that the cron job
-`collect --hooked` exists. The *Integration* tile in the WHM Server tab shows **Stats hook**.
+`collect --hooked` exists. The *Integration* tile in the WHM server view shows **Stats hook**.
 
 If you turn off "Delete each domain's access logs after statistics are gathered" in WHM » Tweak
 Settings » Stats and Logs, the logs are no longer truncated and the hooks matter less; WebPulse handles

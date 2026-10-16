@@ -131,7 +131,7 @@ so the Settings tab is testable); admin and reseller get 403, an empty body 400.
 ## Actions (admin scope — `admin` and `reseller` principals)
 
 * `a=admin.overview` – totals across visible accounts for today/7d/30d,
-  top 10 domains by visits_30d, bot share, disk usage of data dir, last jobs,
+  top domains by visits_30d (`top`, 1–500, default 10; the server report asks for 500), bot share, disk usage of data dir, last jobs,
   collector health (`last_collect_at`, `lag_seconds` = now − newest
   `last_line_ts`, `cron_installed`, `hook_installed`, `geoip`:{enabled, db_date}).
 * `a=admin.accounts` – list of accounts with `user, owner, enabled (effective

@@ -137,7 +137,7 @@ pub fn bootstrap(ctx: &Ctx, p: &Principal, o: &PageOptions) -> serde_json::Value
             _ => {}
         }
     }
-    json!({
+    let mut boot = json!({
         "apiUrl": o.api_url,
         "principal": p.to_json(),
         "domains": domains,
@@ -146,7 +146,27 @@ pub fn bootstrap(ctx: &Ctx, p: &Principal, o: &PageOptions) -> serde_json::Value
         "embedded": o.embedded,
         "dims": dimension::meta(),
         "ranges": range::SHORTCUTS,
-    })
+    });
+    // The server name on the cover of the WHM reports (admin scope only).
+    if p.has_admin_scope()
+        && let Some(host) = hostname()
+    {
+        boot["hostname"] = json!(host);
+    }
+    boot
+}
+
+/// This machine's host name (`gethostname(2)`), `None` when unavailable.
+fn hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: the pointer and length describe `buf`, which is valid for writes.
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    if rc != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let host = String::from_utf8_lossy(&buf[..end]).trim().to_string();
+    (!host.is_empty()).then_some(host)
 }
 
 /// Full HTML document, or (embedded) a `<div id="webpulse-app">` fragment

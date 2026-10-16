@@ -33,6 +33,8 @@ administrator gets a WHM plugin to switch collection on and off per account or d
   `max_execution_time` surprises. The collector reads about 150 000 log lines per second of CPU time
   with a peak of 28 MiB on the development machine, about 5× the 30 000 lines/s of the 0.1.0 PHP
   engine (see [How it works](#how-it-works)).
+- **PDF report of every tab** (print-based, no dependencies). **Download PDF** opens a printable
+  report of the selected domain and range (in WHM also a server report) and offers *Save as PDF*.
 - **Light and dark theme**, works on a phone.
 
 ![WHM server view](docs/screenshots/server-1280-dark.png)
@@ -213,14 +215,15 @@ For locked-down servers, every command the installer runs is listed in the wiki:
 
 ## Quick tour of the dashboard
 
-The header has a domain picker, date range buttons (today, yesterday, 7 days, 30 days, this month, last
-month, 12 months, custom), a **Compare** switch and a light/dark toggle. Below it come eight KPI tiles
-(visits, unique visitors, pageviews, pages per visit, average duration, bounce rate, bandwidth, bot
-share) and one main chart. Then the tabs:
+The header has a domain picker (in WHM followed by the **Server** button, which switches to the
+server view), date range buttons (today, yesterday, 7 days, 30 days, this month, last month, 12 months,
+custom), a **Compare** switch, a **Download PDF** button and a light/dark toggle. Below it come eight
+KPI tiles (visits, unique visitors, pageviews, pages per visit, average duration, bounce rate,
+bandwidth, bot share) and one main chart. Then the tabs:
 
 | Tab | What it shows |
 |-----|---------------|
-| **Server** (WHM only) | Server totals, top domains, collector health, accounts with On/Off switches, jobs, settings. |
+| **Server** button (WHM only) | The server view: server totals, top domains, collector health, accounts with On/Off switches, jobs, settings. |
 | **Overview** | When people visit (heatmap), top pages, channels, top referrers, countries, devices, engagement. |
 | **Pages** | Top pages, entry pages with bounce rate, exit pages with exit rate, downloads. |
 | **Acquisition** | Channels over time, referrer hosts and URLs, search engines, keywords, campaigns, source / medium. |
@@ -230,7 +233,8 @@ share) and one main chart. Then the tabs:
 | **Visits log** | Individual visits with country, device, channel, duration and the pages viewed. |
 | **Settings** (cPanel only) | Per-domain timezone, excluded IPs and paths, dashboard preferences. |
 
-Every table can be exported as CSV. More in the wiki:
+Every table can be exported as CSV, and **Download PDF** prints every tab (Settings excepted) into
+one report, a new page per tab. More in the wiki:
 [Using the Dashboard](https://github.com/inalto/webpulse/wiki/Using-the-Dashboard).
 
 ## Command line

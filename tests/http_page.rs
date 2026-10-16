@@ -89,8 +89,89 @@ fn admin_pages_include_admin_js() {
         &Principal::admin(),
         PageOptions::new("api.cgi", false, None),
     );
-    assert!(html.contains("window.WebPulseAdmin = { render: render };"));
+    assert!(html.contains("window.WebPulseAdmin = { render: render, report: report };"));
     assert!(html.contains("\"principal\":{\"type\":\"admin\",\"name\":\"root\"}"));
+    // the server view is a header button, not a tab
+    assert!(html.contains("'wp-server-btn'") && html.contains("location.hash = '#server'"));
+    assert!(!html.contains("tabs.unshift('server')"));
+}
+
+/// Bootstrap of a page (`window.WEBPULSE`).
+fn boot_of(html: &str) -> Value {
+    let start = html.find("window.WEBPULSE = ").unwrap() + "window.WEBPULSE = ".len();
+    let end = start + html[start..].find(";</script>").unwrap();
+    serde_json::from_str(&html[start..end]).unwrap()
+}
+
+#[test]
+fn hostname_only_for_admin_scope() {
+    let env = shared(SEED);
+    let user = boot_of(&page(
+        &env,
+        &Principal::user("alice"),
+        PageOptions::new("api.live.php", false, None),
+    ));
+    assert!(
+        user.get("hostname").is_none(),
+        "no server name for cPanel users"
+    );
+    let admin = boot_of(&page(
+        &env,
+        &Principal::admin(),
+        PageOptions::new("api.cgi", false, None),
+    ));
+    if let Some(h) = admin.get("hostname") {
+        assert!(h.as_str().is_some_and(|h| !h.is_empty()));
+    }
+}
+
+#[test]
+fn report_view_and_print_stylesheet_are_inlined() {
+    let env = shared(SEED);
+    for embedded in [false, true] {
+        let html = page(
+            &env,
+            &Principal::user("alice"),
+            PageOptions::new("api.live.php", embedded, None),
+        );
+        // client-side report view (`#report&d=…`): every tab in sequence, then print once
+        for marker in [
+            "'report' in p",
+            "function renderReport(",
+            "var REPORT_TABS = ['overview', 'pages', 'acquisition', 'audience', 'technical', 'bots', 'visits'];",
+            "noprint=1",
+            "window.print()",
+            "S.printed",
+            "function printHost(",
+            "'Download PDF'",
+            "'Save as PDF'",
+            "'Back to dashboard'",
+        ] {
+            assert!(
+                html.contains(marker),
+                "report marker {marker} (embedded={embedded})"
+            );
+        }
+        // print stylesheet: light only, page breaks per section, chrome hidden
+        for marker in [
+            "@media print {",
+            "@page {",
+            ".wp-rpt-sec + .wp-rpt-sec { break-before: page;",
+            "break-inside: avoid;",
+            ".wp-print-hide { display: none !important; }",
+            "max-width: 190mm",
+            "@media screen and (prefers-color-scheme: dark)",
+        ] {
+            assert!(
+                html.contains(marker),
+                "print marker {marker} (embedded={embedded})"
+            );
+        }
+        assert!(
+            !html.contains("@media (prefers-color-scheme: dark)"),
+            "dark tokens must not reach paper"
+        );
+    }
 }
 
 #[test]

@@ -43,7 +43,7 @@ type R = anyhow::Result<Value>;
 /// Dispatches `admin.<action>`.
 pub fn handle(ctx: &Ctx, r: &Request, p: &Principal, action: &str) -> R {
     match action {
-        "overview" => overview(ctx, p),
+        "overview" => overview(ctx, r, p),
         "accounts" => accounts(ctx, r, p),
         "set_account" => set_account(ctx, r, p),
         "set_domain" => set_domain(ctx, r, p),
@@ -88,7 +88,9 @@ fn iso_or_null(ts: i64) -> Value {
     }
 }
 
-fn overview(ctx: &Ctx, p: &Principal) -> R {
+fn overview(ctx: &Ctx, r: &Request, p: &Principal) -> R {
+    // `top` (1..=500, default 10): rows of `top_domains` (the server report asks for all).
+    let top_n = r.get("top").map(php::intval).unwrap_or(10).clamp(1, 500) as usize;
     let reg = ctx.registry()?;
     let users = scope(ctx, p)?;
     let sums = reg.summaries(users.as_deref())?;
@@ -150,7 +152,7 @@ fn overview(ctx: &Ctx, p: &Principal) -> R {
     top.sort_by_key(|s| std::cmp::Reverse(int_of(s, "visits_30d")));
     let top: Vec<Value> = top
         .iter()
-        .take(10)
+        .take(top_n)
         .map(|s| {
             json!({
                 "user": s.get("user"), "domain": s.get("domain"), "visits_30d": s.get("visits_30d"),

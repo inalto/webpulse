@@ -1,13 +1,14 @@
 # Dashboard — reports, graphs and the reasoning behind them
 
-The same single-page app (vanilla JS, inline SVG charts, inline CSS, ≈ 120 KB
-unminified, no external requests, light/dark via `prefers-color-scheme` with a
+The same single-page app (vanilla JS, inline SVG charts, inline CSS, ≈ 190 KB
+unminified (budget 200 KB, checked by `tests/http_page.rs`), no external requests, light/dark via `prefers-color-scheme` with a
 manual toggle) is served to cPanel users, WHM admins and the dev server. It is
 rendered by the binary (`http::page::render(&Ctx, &Principal, &PageOptions)`,
 `webpulse cgi --page`) as one HTML document with `<script>` and `<style>`
 inlined (`ui/*.js` and `ui/app.css` are embedded in the binary), so it works
 behind the cPanel shim and the WHM CGI without caring about static-asset paths. The page receives a JSON
-bootstrap (`window.WEBPULSE = {apiUrl, principal, domains, defaults, version}`).
+bootstrap (`window.WEBPULSE = {apiUrl, principal, domains, defaults, version, embedded, dims, ranges}`,
+plus `hostname` for admin-scope principals — it appears on the cover of the WHM reports).
 
 Design principles (from Plausible's simplicity, Matomo's depth, GoAccess'
 technical panels, AWStats' completeness):
@@ -30,7 +31,8 @@ technical panels, AWStats' completeness):
 
 ```
 ┌ Header ─────────────────────────────────────────────────────────────────────┐
-│ ● WebPulse   [example.com ▾]   [Today|Yesterday|7d|30d|Month|Last month|12m|Custom]  [Compare □]  [☾] │
+│ ● WebPulse   [example.com ▾] [▤ Server]   [Today|Yesterday|7d|30d|Month|Last month|12m|Custom]  [Compare □]  [⤓ PDF]  [☾] │
+│   ([▤ Server] only for admin/reseller; icon-only below 640 px; [⤓ PDF] = "Download PDF", opens the report view) │
 │ Live: 7 active visits · last collection 3 min ago   (90 days / This year / All time live in the narrow-screen drop-down)                        │
 ├ KPI row (8 tiles, 4 per row on tablet, 2 on phone) ─────────────────────────┤
 │ Visits  Unique visitors  Pageviews  Pages/visit  Avg. duration  Bounce rate  Bandwidth  Bot share │
@@ -95,8 +97,21 @@ uses the IP the API reports from `REMOTE_ADDR`), excluded path prefixes; a
 note that changes apply to new data only. Saved via `save_user_settings`.
 
 ## WHM admin page
-Same SPA with `principal.type = admin|reseller` and an extra **Server** tab
-first:
+Same SPA with `principal.type = admin|reseller`. There is no Server tab: a
+**Server** button (stacked-servers icon, same height, radius and border as
+the domain switcher, `aria-pressed` = server view shown) sits right after the
+domain switcher. It shows the **server view** in the main area — the content
+below, rendered by `ui/admin.js` — and hides the domain tabs, the KPI row and
+main chart, the range buttons, **Compare** and the live line; the domain
+switcher stays. Choosing a domain (switcher, Top domains, "View dashboard" in
+Accounts) returns to the domain view with that domain selected; pressing the
+pressed button does the same for the current domain. Hash state: `#server`
+(bookmarkable, Back works; the pre-0.3 `#t=server` still opens it); an empty
+hash lands admins on the server view; the per-domain state
+(`#t=…&d=…&u=…&r=…&f=…&to=…&c=…&m=…`) is unchanged and the arrow-key tab
+navigation cycles through the domain tabs only. Below 640 px the button
+collapses to its icon (`aria-label` "Server overview: all accounts and
+domains"). The server view contains:
 
 * Server KPIs (visits/pageviews/bandwidth today/7d/30d across visible
   accounts; bot share; data-dir size; collector lag; cron & hook status).
@@ -108,6 +123,46 @@ first:
   timeout, store IP, server-wide excluded IPs/paths, GeoIP toggle, timezone.
 * **Jobs**: Run collection now / Backfill from archives (pick account) /
   Run rollup, job history with status and line counts.
+
+## Report view and PDF (`#report`)
+The header's **Download PDF** icon button (every principal, domain view with
+data; in the server view it prints the server report) is a link opening the
+same document in a new tab with `#report&d=…&u=…&r=…&f=…&to=…&c=…&m=…` (the
+current domain/range/compare state) or `#report=server`. No server-side PDF
+code: the browser prints the page (Save as PDF), so the same API, auth and
+URLs work for cPanel (`index.live.php#report…` inside the Jupiter chrome),
+WHM (`index.cgi#report…`) and the dev server.
+
+* **Domain report:** on-screen toolbar (not printed): **Save as PDF**
+  (`window.print()`), **Back to dashboard**, a status line. Cover: domain,
+  period (and compared period), generated timestamp, account (WHM), server
+  hostname (WHM, from the bootstrap), "WebPulse <version>", contents. Then
+  every tab in sequence — Overview (KPI tiles + main chart + cards), Pages,
+  Acquisition, Audience, Technical, Bots, the first 50 visits of the Visits
+  log — Settings excluded. Top lists use limit 25 (no "Show more" on paper);
+  cards with three or more columns take the full width. Each section ends
+  with a footer line (domain, period, version).
+* **Server report** (`WebPulseAdmin.report`): server KPI tiles, every top
+  domain (`admin.overview&top=500`), accounts summary table (state and
+  Default/On/Off as text, no switches), the 20 most recent jobs; no settings.
+* **Auto print:** every API call of the report is counted; when the last one
+  has settled (and the sections exist) the status says "Report ready.",
+  `#webpulse-app` gets `data-report-ready="1"` and `window.print()` runs once
+  (guarded). `noprint=1` in the query (`?noprint=1`, kept by the dev server's
+  token redirect) or in the hash (`#report&noprint=1&…`) disables it for
+  headless rendering and screenshots.
+* **Print stylesheet** (`@media print`, also applies when printing the
+  normal dashboard): dark tokens are screen-only, so paper is always light;
+  header, tabs, toolbar, buttons, "Show more", CSV links, info buttons and
+  the live badge are hidden; content max 190 mm wide (A4 and Letter);
+  slightly smaller type; links undecorated; `break-before: page` per section,
+  `break-inside: avoid` for cards, tiles and visits; charts are the SVGs
+  (vectors, `max-width: 100%`); `@page` margin box with "page / pages".
+* **cPanel chrome:** the embedded fragment sits deep inside Jupiter's layout,
+  so `body > :not(#webpulse-app)` is not enough: the report marks every
+  sibling of each ancestor of `#webpulse-app` with `wp-print-hide` and the
+  ancestors with `wp-print-host` (margins, padding, positioning and overflow
+  reset in print), which hides the top bar, sidebar, page title and footer.
 
 ## Charts (ui/charts.js)
 Hand-written, ≈ 500 lines: `lineChart`, `areaChart` (stacked option),

@@ -4,6 +4,26 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-16
+
+### Added
+- WHM: a **Server** button next to the domain picker replaces the Server tab. It shows the server
+  view (totals, top domains, accounts with their switches, jobs, settings) and hides the domain tabs,
+  date range, Compare and the live line; picking a domain returns to its tabs. The view has its own
+  address (`#server`, the old `#t=server` still works), so Back and bookmarks work. On a phone only
+  the icon is shown.
+- **PDF report of every tab** (print-based, no dependencies): the new **Download PDF** button opens a
+  report of the domain, range and comparison in a new tab — a cover, then Overview, Pages,
+  Acquisition, Audience, Technical, Bots and the 50 latest visits, each on a new page, top lists with
+  25 rows — and opens the print dialog once everything has loaded (`noprint=1` turns that off). In
+  the WHM server view it prints a server report: tiles, every domain, accounts and the last 20 jobs.
+  A print stylesheet makes any printout light, A4/Letter wide and free of buttons and cPanel chrome.
+- `admin.overview` accepts `top` (1–500, default 10) for the length of `top_domains`; the WHM page
+  bootstrap carries the server `hostname` for the report cover.
+
+### Changed
+- The dev server's token redirect keeps `?noprint=1`.
+
 ## [0.2.4] - 2026-10-16
 
 ### Fixed
@@ -149,6 +169,7 @@ First public version.
   resellers no longer read global settings; log messages are sanitised; `\z` anchors in name validation and a
   single account-name rule.
 
+[0.3.0]: https://github.com/inalto/webpulse/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/inalto/webpulse/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/inalto/webpulse/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/inalto/webpulse/compare/v0.2.1...v0.2.2

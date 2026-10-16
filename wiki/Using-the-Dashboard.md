@@ -9,8 +9,9 @@ labels you see on screen.
 ## Opening it
 
 - **Account owners:** cPanel » Metrics » **WebPulse Analytics**.
-- **Administrators and resellers:** WHM » Plugins » **WebPulse Analytics**. The first tab is **Server**
-  (see [[WHM Administration]]); the other tabs work as described here for any domain you pick.
+- **Administrators and resellers:** WHM » Plugins » **WebPulse Analytics**. It opens on the server
+  view; the **Server** button next to the domain picker brings you back to it (see
+  [[WHM Administration]]). Pick a domain and the tabs work as described here.
 
 ## Header controls
 
@@ -19,6 +20,8 @@ labels you see on screen.
 | Domain picker | Choose the domain. It has a search box. A domain without data yet is marked *no data yet*. |
 | Date range | **Today**, **Yesterday**, **7 days**, **30 days**, **This month**, **Last month**, **12 months**, **Custom** (a From and To date, then **Apply**). On narrow screens the buttons become a drop-down that also offers **90 days**, **This year** and **All time**. |
 | **Compare** | Compares with the previous period of the same length. KPI tiles show the change; the main chart draws the previous period as a dashed line. |
+| **Server** (WHM only) | Next to the domain picker. Shows the server view instead of the domain tabs; pick a domain (or click one in the server view) to come back. On a phone only its icon is shown. |
+| **Download PDF** (document icon) | Opens a printable report of the domain in a new browser tab; see [PDF report](#pdf-report). |
 | Theme button | Switches between light and dark. The default follows your system. |
 
 The domain, range and tab are kept in the address (after `#`), so a view can be bookmarked.
@@ -123,6 +126,23 @@ Per domain, the account owner can set:
 Changes apply to data collected from then on; existing reports are not recalculated. In WHM this tab
 is not shown: the settings are managed by each account owner. Server-wide settings are in the Server
 tab ([[WHM Administration]]).
+
+## PDF report
+
+**Download PDF** (the document icon in the header) opens a report of the selected domain, date range
+and comparison in a new browser tab. It contains a cover (domain, period, date and time it was made,
+WebPulse version) and then every tab one after another, each starting on a new page: Overview with
+the KPI tiles and the main chart, Pages, Acquisition, Audience, Technical, Bots and the 50 most recent
+visits of the Visits log. Top lists show 25 rows. Settings are not included.
+
+Once everything has loaded, the browser's print dialog opens by itself: choose **Save as PDF** (or
+*Microsoft Print to PDF*) as the printer. If you close the dialog, the **Save as PDF** button at the top
+of the report opens it again; **Back to dashboard** returns to the normal view. The report is always
+printed in the light theme, A4 and Letter both fit, and charts stay sharp because they are vector
+graphics. Nothing is sent anywhere: the PDF is made by your own browser.
+
+In WHM, the same button in the server view prints a server report instead (see
+[[WHM Administration]]).
 
 ## CSV export
 

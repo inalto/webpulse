@@ -1,8 +1,98 @@
-/* WebPulse — WHM "Server" tab (admin and reseller principals). */
+/* WebPulse — WHM server view and server report (admin and reseller principals). */
 (function () {
   'use strict';
 
   var A = {};
+
+  /** The server KPI grid (admin.overview). */
+  function heroCells(kp, o, ctx) {
+    var h = ctx.h, fmt = ctx.fmt;
+    var cell = function (label, value, sub) {
+      var d = h('div', null, null, kp);
+      h('div', 'wp-kpi-label', label, d);
+      if (value != null) h('div', 'wp-kpi-value', value, d);
+      if (sub) h('div', 'wp-kpi-sub', sub, d);
+      return d;
+    };
+    cell('Visits today', fmt.num(o.totals.today.visits), fmt.num(o.totals.today.pageviews) + ' pageviews');
+    cell('Visits, 7 days', fmt.num(o.totals['7d'].visits), fmt.num(o.totals['7d'].pageviews) + ' pageviews');
+    cell('Visits, 30 days', fmt.num(o.totals['30d'].visits), fmt.num(o.totals['30d'].pageviews) + ' pageviews');
+    cell('Bandwidth, 30 days', fmt.bytes(o.totals['30d'].bytes), fmt.bytes(o.totals['7d'].bytes) + ' in 7 days');
+    cell('Bot share, 30 days', o.bot_share_30d == null ? '–' : fmt.pct(o.bot_share_30d), fmt.num(o.totals['30d'].bot_hits) + ' bot hits' + (o.bot_share_partial ? ' (partial)' : ''));
+    cell('Data size', fmt.bytes(o.disk.data_bytes), o.disk.databases + ' databases · ' + o.accounts.enabled + '/' + o.accounts.total + ' accounts on');
+    var lag = o.collector.lag_seconds;
+    cell('Collector', o.collector.last_collect_at ? ctx.ago(o.collector.last_collect_at) : 'never',
+      lag == null ? 'no log lines yet' : 'newest log line ' + (lag < 120 ? lag + ' s' : Math.round(lag / 60) + ' min') + ' old');
+    var st = cell('Integration', null, null);
+    var line = function (label, good) {
+      var p = h('div', 'wp-kpi-sub', null, st);
+      h('span', good ? 'wp-ok-icon' : 'wp-bad-icon', (good ? '✓' : '✗') + ' ', p);
+      h('span', null, label, p);
+    };
+    line('Cron job', o.collector.cron_installed);
+    line('Stats hook', o.collector.hook_installed);
+    line('GeoIP' + (o.collector.geoip.db_date ? ' (' + o.collector.geoip.db_date + ')' : ''), o.collector.geoip.enabled && !!o.collector.geoip.db_date);
+  }
+
+  /** Top domains table; `link` opens a domain in the dashboard. */
+  function topDomains(body, list, ctx, link) {
+    var h = ctx.h, fmt = ctx.fmt;
+    if (!list.length) { h('div', 'wp-empty', 'No data collected yet. Run a collection below.', body); return; }
+    var wrap = h('div', 'wp-scroll', null, body);
+    var tbl = h('table', 'wp-table is-admin', null, wrap);
+    var hr = h('tr', null, null, h('thead', null, null, tbl));
+    ['Domain', 'Visits', 'Pageviews', 'Bandwidth', 'Bot hits', 'Today', 'Last collection'].forEach(function (x, i) {
+      var th = h('th', i >= 2 ? 'is-optional' : null, x, hr); th.scope = 'col';
+    });
+    var tb = h('tbody', null, null, tbl);
+    var max = Math.max.apply(null, list.map(function (d) { return d.visits_30d; }).concat([1]));
+    list.forEach(function (d) {
+      var tr = h('tr', null, null, tb);
+      var key = h('div', 'wp-key', null, h('td', null, null, tr));
+      h('span', 'wp-key-bar', null, key).style.width = Math.max(0.5, d.visits_30d / max * 100) + '%';
+      var a = h(link ? 'a' : 'span', 'wp-key-text', d.domain, key);
+      if (link) {
+        a.href = '#';
+        a.addEventListener('click', function (ev) { ev.preventDefault(); ctx.openDomain(d.user, d.domain); });
+      }
+      h('span', 'wp-badge', d.user, key);
+      h('td', null, fmt.num(d.visits_30d), tr);
+      h('td', 'is-optional', fmt.num(d.pageviews_30d), tr);
+      h('td', 'is-optional', fmt.bytes(d.bytes_30d), tr);
+      h('td', 'is-optional', fmt.num(d.bot_hits_30d), tr);
+      h('td', 'is-optional', fmt.num(d.visits_today), tr);
+      h('td', 'is-optional', d.last_collect_at ? ctx.ago(d.last_collect_at) : '–', tr);
+    });
+  }
+
+  /** Jobs table (newest first). */
+  function jobsTable(body, jobs, ctx) {
+    var h = ctx.h, fmt = ctx.fmt;
+    if (!jobs.length) { h('div', 'wp-empty', 'No jobs have run yet.', body); return false; }
+    var wrap = h('div', 'wp-scroll', null, body);
+    var tbl = h('table', 'wp-table is-admin', null, wrap);
+    var hr = h('tr', null, null, h('thead', null, null, tbl));
+    [['#', 'is-left'], ['Type', 'is-left'], ['Scope', 'is-left is-optional'], ['Started', 'is-left'], ['Took', ''], ['Lines', ''], ['Status', 'is-left']].forEach(function (x) {
+      var th = h('th', x[1], x[0], hr); th.scope = 'col';
+    });
+    var tb = h('tbody', null, null, tbl);
+    var running = false;
+    jobs.forEach(function (j) {
+      var tr = h('tr', null, null, tb);
+      h('td', 'is-left', String(j.id), tr);
+      h('td', 'is-left', j.type, tr);
+      h('td', 'is-left is-optional', j.scope || '–', tr);
+      h('td', 'is-left', j.started_at_iso ? ctx.ago(j.started_at_iso) : '–', tr);
+      h('td', null, j.finished_at ? fmt.duration(j.finished_at - j.started_at) : '…', tr);
+      h('td', null, fmt.num(j.lines), tr);
+      var st = h('td', 'is-left', null, tr);
+      var cls = j.status === 'ok' ? 'is-on' : j.status === 'running' ? 'is-live' : j.status === 'error' ? 'is-off' : '';
+      var b = h('span', 'wp-badge ' + cls, j.status, st);
+      if (j.message) { b.title = j.message; h('span', 'wp-card-sub', ' ' + j.message.slice(0, 60), st); }
+      if (j.status === 'running') running = true;
+    });
+    return running;
+  }
 
   function render(root, ctx) {
     var h = ctx.h, t = ctx.t, C = ctx.C, fmt = ctx.fmt;
@@ -25,61 +115,9 @@
     var set = isRoot ? ctx.card(grid, { title: 'Settings', sub: 'Server-wide; stored in the WebPulse registry.', span: 'third' }) : null;
 
     ctx.load({ el: hero, body: kp }, function () { return ctx.api({ a: 'admin.overview' }); }, function (o) {
-      var cell = function (label, value, sub, cls) {
-        var d = h('div', null, null, kp);
-        h('div', 'wp-kpi-label', label, d);
-        var v = h('div', 'wp-kpi-value', value, d);
-        if (cls) v.classList.add(cls);
-        if (sub) h('div', 'wp-kpi-sub', sub, d);
-        return d;
-      };
-      cell('Visits today', fmt.num(o.totals.today.visits), fmt.num(o.totals.today.pageviews) + ' pageviews');
-      cell('Visits, 7 days', fmt.num(o.totals['7d'].visits), fmt.num(o.totals['7d'].pageviews) + ' pageviews');
-      cell('Visits, 30 days', fmt.num(o.totals['30d'].visits), fmt.num(o.totals['30d'].pageviews) + ' pageviews');
-      cell('Bandwidth, 30 days', fmt.bytes(o.totals['30d'].bytes), fmt.bytes(o.totals['7d'].bytes) + ' in 7 days');
-      cell('Bot share, 30 days', o.bot_share_30d == null ? '–' : fmt.pct(o.bot_share_30d), fmt.num(o.totals['30d'].bot_hits) + ' bot hits' + (o.bot_share_partial ? ' (partial)' : ''));
-      cell('Data size', fmt.bytes(o.disk.data_bytes), o.disk.databases + ' databases · ' + o.accounts.enabled + '/' + o.accounts.total + ' accounts on');
-      var lag = o.collector.lag_seconds;
-      cell('Collector', o.collector.last_collect_at ? ctx.ago(o.collector.last_collect_at) : 'never',
-        lag == null ? 'no log lines yet' : 'newest log line ' + (lag < 120 ? lag + ' s' : Math.round(lag / 60) + ' min') + ' old');
-      var ok = function (b) { return b ? '✓' : '✗'; };
-      var st = cell('Integration', null, null);
-      var line = function (label, good) {
-        var p = h('div', 'wp-kpi-sub', null, st);
-        h('span', good ? 'wp-ok-icon' : 'wp-bad-icon', ok(good) + ' ', p);
-        h('span', null, label, p);
-      };
-      st.querySelector('.wp-kpi-value').remove();
-      line('Cron job', o.collector.cron_installed);
-      line('Stats hook', o.collector.hook_installed);
-      line('GeoIP' + (o.collector.geoip.db_date ? ' (' + o.collector.geoip.db_date + ')' : ''), o.collector.geoip.enabled && !!o.collector.geoip.db_date);
-
-      // top domains
+      heroCells(kp, o, ctx);
       ctx.clear(top.body);
-      if (!o.top_domains.length) { h('div', 'wp-empty', 'No data collected yet. Run a collection below.', top.body); return; }
-      var wrap = h('div', 'wp-scroll', null, top.body);
-      var tbl = h('table', 'wp-table is-admin', null, wrap);
-      var hr = h('tr', null, null, h('thead', null, null, tbl));
-      ['Domain', 'Visits', 'Pageviews', 'Bandwidth', 'Bot hits', 'Today', 'Last collection'].forEach(function (x, i) {
-        var th = h('th', i >= 2 ? 'is-optional' : null, x, hr); th.scope = 'col';
-      });
-      var tb = h('tbody', null, null, tbl);
-      var max = Math.max.apply(null, o.top_domains.map(function (d) { return d.visits_30d; }).concat([1]));
-      o.top_domains.forEach(function (d) {
-        var tr = h('tr', null, null, tb);
-        var key = h('div', 'wp-key', null, h('td', null, null, tr));
-        h('span', 'wp-key-bar', null, key).style.width = Math.max(0.5, d.visits_30d / max * 100) + '%';
-        var a = h('a', 'wp-key-text', d.domain, key);
-        a.href = '#';
-        a.addEventListener('click', function (ev) { ev.preventDefault(); ctx.openDomain(d.user, d.domain); });
-        h('span', 'wp-badge', d.user, key);
-        h('td', null, fmt.num(d.visits_30d), tr);
-        h('td', 'is-optional', fmt.num(d.pageviews_30d), tr);
-        h('td', 'is-optional', fmt.bytes(d.bytes_30d), tr);
-        h('td', 'is-optional', fmt.num(d.bot_hits_30d), tr);
-        h('td', 'is-optional', fmt.num(d.visits_today), tr);
-        h('td', 'is-optional', d.last_collect_at ? ctx.ago(d.last_collect_at) : '–', tr);
-      });
+      topDomains(top.body, o.top_domains, ctx, true);
     });
 
     /* ------------------------------------------------------- accounts */
@@ -245,29 +283,7 @@
       ctx.api({ a: 'admin.jobs' }).then(function (d) {
         if (!alive()) return;
         ctx.clear(jobs.body);
-        if (!d.jobs.length) { h('div', 'wp-empty', 'No jobs have run yet.', jobs.body); return; }
-        var wrap = h('div', 'wp-scroll', null, jobs.body);
-        var tbl = h('table', 'wp-table is-admin', null, wrap);
-        var hr = h('tr', null, null, h('thead', null, null, tbl));
-        [['#', 'is-left'], ['Type', 'is-left'], ['Scope', 'is-left is-optional'], ['Started', 'is-left'], ['Took', ''], ['Lines', ''], ['Status', 'is-left']].forEach(function (x) {
-          var th = h('th', x[1], x[0], hr); th.scope = 'col';
-        });
-        var tb = h('tbody', null, null, tbl);
-        var running = false;
-        d.jobs.slice(0, 25).forEach(function (j) {
-          var tr = h('tr', null, null, tb);
-          h('td', 'is-left', String(j.id), tr);
-          h('td', 'is-left', j.type, tr);
-          h('td', 'is-left is-optional', j.scope || '–', tr);
-          h('td', 'is-left', j.started_at_iso ? ctx.ago(j.started_at_iso) : '–', tr);
-          h('td', null, j.finished_at ? fmt.duration(j.finished_at - j.started_at) : '…', tr);
-          h('td', null, fmt.num(j.lines), tr);
-          var st = h('td', 'is-left', null, tr);
-          var cls = j.status === 'ok' ? 'is-on' : j.status === 'running' ? 'is-live' : j.status === 'error' ? 'is-off' : '';
-          var b = h('span', 'wp-badge ' + cls, j.status, st);
-          if (j.message) { b.title = j.message; h('span', 'wp-card-sub', ' ' + j.message.slice(0, 60), st); }
-          if (j.status === 'running') running = true;
-        });
+        var running = jobsTable(jobs.body, d.jobs.slice(0, 25), ctx);
         if (running) A.poll = setTimeout(function () { if (alive()) loadJobs(); }, 3000);
       }).catch(function (e) {
         if (!alive()) return;
@@ -357,5 +373,48 @@
     }
   }
 
-  window.WebPulseAdmin = { render: render };
+  /** Printable server report: KPIs, every top domain, accounts (no switches), last 20 jobs. */
+  function report(root, ctx) {
+    var h = ctx.h, fmt = ctx.fmt;
+    var sec = ctx.section('Server');
+    var hero = h('section', 'wp-hero', null, sec.body);
+    var kp = h('div', 'wp-health', null, hero);
+    var grid = h('div', 'wp-grid wp-rpt-gap', null, sec.body);
+    var top = ctx.card(grid, { title: 'Top domains', sub: 'Last 30 days, every domain with data', span: 'wide' });
+    ctx.load({ el: hero, body: kp }, function () { return ctx.api({ a: 'admin.overview', top: 500 }); }, function (o) {
+      heroCells(kp, o, ctx);
+      ctx.clear(top.body);
+      topDomains(top.body, o.top_domains, ctx, false);
+    });
+
+    var acc = ctx.card(h('div', 'wp-grid', null, ctx.section('Accounts').body), { title: 'Collection by account', sub: 'Switch: "Default" follows the server setting.', span: 'wide' });
+    ctx.load(acc, function () { return ctx.api({ a: 'admin.accounts', limit: 500 }); }, function (d) {
+      if (!d.accounts.length) { h('div', 'wp-empty', 'No accounts discovered yet.', acc.body); return; }
+      var tbl = h('table', 'wp-table is-admin', null, acc.body);
+      var hr = h('tr', null, null, h('thead', null, null, tbl));
+      [['Account', 'is-left'], ['Owner', 'is-left'], ['State', 'is-left'], ['Switch', 'is-left'], ['Domains', ''], ['Visits 30d', ''], ['Data', '']].forEach(function (x) {
+        var th = h('th', x[1], x[0], hr); th.scope = 'col';
+      });
+      var tb = h('tbody', null, null, tbl);
+      d.accounts.forEach(function (a) {
+        var tr = h('tr', null, null, tb);
+        var k = h('td', 'is-left', null, tr);
+        h('strong', null, a.user, k);
+        if (a.removed) { k.appendChild(document.createTextNode(' ')); h('span', 'wp-badge', 'removed', k); }
+        h('td', 'is-left', a.owner || '–', tr);
+        h('span', 'wp-badge ' + (a.enabled ? 'is-on' : 'is-off'), a.enabled ? 'Collecting' : 'Off', h('td', 'is-left', null, tr));
+        h('td', 'is-left', a.enabled_override === true ? 'On' : a.enabled_override === false ? 'Off' : 'Default', tr);
+        h('td', null, fmt.num(a.domains.length), tr);
+        h('td', null, fmt.num(a.visits_30d), tr);
+        h('td', null, fmt.bytes(a.db_bytes), tr);
+      });
+      acc.foot.hidden = false;
+      h('span', null, d.total + (d.total === 1 ? ' account' : ' accounts') + ', default: collection ' + (d.default_enabled ? 'on' : 'off'), acc.foot);
+    });
+
+    var jobs = ctx.card(h('div', 'wp-grid', null, ctx.section('Recent jobs').body), { title: 'The 20 most recent jobs', span: 'wide' });
+    ctx.load(jobs, function () { return ctx.api({ a: 'admin.jobs' }); }, function (d) { jobsTable(jobs.body, d.jobs.slice(0, 20), ctx); });
+  }
+
+  window.WebPulseAdmin = { render: render, report: report };
 })();

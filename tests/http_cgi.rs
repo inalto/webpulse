@@ -345,7 +345,7 @@ fn page_rendering() {
     assert_eq!(c.header("Content-Type"), Some("text/html; charset=utf-8"));
     let html = c.text();
     assert!(html.starts_with("<!doctype html>"));
-    assert!(html.contains("window.WebPulseAdmin = { render: render };"));
+    assert!(html.contains("window.WebPulseAdmin = { render: render, report: report };"));
     assert!(html.contains("\"apiUrl\":\"api.cgi\""));
     let (_, c) = cgi(
         &env,
@@ -367,6 +367,9 @@ fn page_rendering() {
     assert!(html.starts_with("<div id=\"webpulse-app\" class=\"wp-root\" data-embedded=\"1\">"));
     assert!(html.contains("\"apiUrl\":\"api.live.php?x=1\""));
     assert!(!html.contains("WebPulseAdmin = {"));
+    // `index.live.php#report&…` inside cPanel chrome: report view + print stylesheet
+    assert!(html.contains("function renderReport(") && html.contains("@media print {"));
+    assert!(html.contains("function printHost("));
     let (_, c) = cgi(
         &env,
         &["cgi", "--whm", "--page"],

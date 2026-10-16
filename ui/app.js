@@ -59,7 +59,9 @@
       mobile: 'M5 1.5h6v13H5zM7.5 12.5h1',
       tablet: 'M3 1.5h10v13H3zM7.5 12.5h1',
       other: 'M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM6.5 6.5a1.5 1.5 0 1 1 2 1.4c-.5.2-.5.6-.5 1.1M8 11v.5',
-      refresh: 'M13 8a5 5 0 1 1-1.5-3.5M13 2.5v3h-3'
+      refresh: 'M13 8a5 5 0 1 1-1.5-3.5M13 2.5v3h-3',
+      server: 'M2.5 2.5h11v4.5h-11zM2.5 9h11v4.5h-11zM5 4.75h.01M5 11.25h.01M8 4.75h3M8 11.25h3',
+      report: 'M9.5 1.5H4.5a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-9zM9.5 1.5v3h3M8 7v4.5M6 9.5l2 2 2-2'
     };
     var svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('viewBox', '0 0 16 16');
@@ -239,6 +241,10 @@
       S.cache[url] = p;
       p.catch(function () { delete S.cache[url]; });
     }
+    if (S.report) {
+      S.pending++;
+      p.then(settled, settled);
+    }
     return p;
   }
 
@@ -287,6 +293,11 @@
     });
     return '#' + parts.join('&');
   }
+  /** Hash of the printable report for the current view (opened in a new tab). */
+  function reportHash() {
+    if (S.view === 'server') return '#report=server';
+    return stateHash({ t: '' }).replace(/^#/, '#report&');
+  }
   function navigate(patch, replace) {
     var hsh = stateHash(patch);
     if (hsh === location.hash) { applyHash(); return; }
@@ -304,12 +315,8 @@
     for (var i = 0; i < S.domains.length; i++) if (S.domains[i].has_data) return S.domains[i];
     return S.domains[0] || null;
   }
-  function applyHash() {
-    var p = parseHash();
-    var isAdmin = S.boot.principal.type !== 'user';
-    var tabs = availableTabs();
-    var prevKey = dataKey();
-    S.tab = tabs.indexOf(p.t) >= 0 ? p.t : tabs[0];
+  /** Domain, range, compare and chart metrics from a parsed hash. */
+  function readState(p) {
     S.domain = (p.d && findDomain(p.d, p.u)) || S.domain || firstDomain();
     S.range = p.r === 'custom' && /^\d{4}-\d\d-\d\d$/.test(p.f || '') && /^\d{4}-\d\d-\d\d$/.test(p.to || '') ? 'custom'
       : (ALL_RANGES.indexOf(p.r) >= 0 ? p.r : S.defaults.range);
@@ -318,23 +325,42 @@
     S.compare = p.c === '1';
     var ms = (p.m || '').split(',').filter(function (m) { return METRICS[m]; });
     S.metrics = ms.length ? ms : ['visits', 'pageviews'];
+  }
+  function applyHash() {
+    var p = parseHash();
+    var tabs = availableTabs();
+    var prevKey = dataKey();
+    // Admins land on the server view; `#t=server` is the pre-0.3 bookmark form.
+    S.view = S.isAdmin && ('server' in p || p.t === 'server' || !location.hash.replace(/^#\/?/, '')) ? 'server' : 'domain';
+    S.tab = tabs.indexOf(p.t) >= 0 ? p.t : (S.view === 'server' && S.tab) || tabs[0];
+    readState(p);
     if (dataKey() !== prevKey) { S.cache = {}; S.overview = null; }
-    if (!isAdmin && S.tab === 'server') S.tab = 'overview';
     render();
+  }
+  /** Hash change: the report view and the dashboard are two different shells. */
+  function route() {
+    var p = parseHash();
+    if ('report' in p) {
+      if (S.mode === 'report' && S.reportHash === location.hash) return;
+      S.mode = 'report';
+      S.reportHash = location.hash;
+      renderReport(p);
+      return;
+    }
+    if (S.mode !== 'app') { S.mode = 'app'; S.report = false; buildShell(); applyTheme(); }
+    applyHash();
   }
   function dataKey() {
     return (S.domain ? S.domain.user + '/' + S.domain.domain : '') + '|' + S.range + '|' + (S.from || '') + '|' + (S.to || '');
   }
   function availableTabs() {
-    var tabs = TABS.slice();
-    var type = S.boot.principal.type;
-    if (type !== 'user') { tabs.unshift('server'); tabs = tabs.filter(function (x) { return x !== 'settings'; }); }
-    return tabs;
+    // Admins and resellers reach the server view through the header button, not a tab.
+    return S.isAdmin ? TABS.filter(function (x) { return x !== 'settings'; }) : TABS.slice();
   }
 
   /* --------------------------------------------------------------- theme */
   function applyTheme() {
-    var th = S.theme;
+    var th = S.mode === 'report' ? 'light' : S.theme;
     if (th === 'light' || th === 'dark') S.root.setAttribute('data-theme', th);
     else S.root.removeAttribute('data-theme');
     if (S.els && S.els.themeBtn) {
@@ -371,6 +397,15 @@
     els.domainBtn.setAttribute('aria-haspopup', 'listbox');
     els.domainBtn.setAttribute('aria-expanded', 'false');
     els.domainBtn.setAttribute('aria-label', t('domain.label'));
+    if (S.isAdmin) {
+      els.serverBtn = btn('wp-server-btn', null, function () {
+        if (S.view === 'server') navigate({}); else location.hash = '#server';
+      }, hi);
+      els.serverBtn.appendChild(svgIcon('server'));
+      h('span', 'wp-server-text', t('server.button'), els.serverBtn);
+      els.serverBtn.setAttribute('aria-label', t('server.label'));
+      els.serverBtn.title = t('server.label');
+    }
 
     h('div', 'wp-header-spacer', null, hi);
     var ctr = els.controls = h('div', 'wp-controls', null, hi);
@@ -406,6 +441,11 @@
     els.compareBtn.title = t('compare.hint');
     els.compareBtn.setAttribute('aria-label', t('compare.hint'));
 
+    els.pdfBtn = h('a', 'wp-btn wp-icon-btn', null, ctr);
+    els.pdfBtn.target = '_blank';
+    els.pdfBtn.rel = 'noopener';
+    els.pdfBtn.appendChild(svgIcon('report'));
+
     els.themeBtn = btn('wp-icon-btn', null, toggleTheme, ctr);
     els.themeBtn.setAttribute('aria-label', t('theme.toggle'));
     els.themeBtn.title = t('theme.toggle');
@@ -427,6 +467,8 @@
     h('span', null, 'WebPulse ' + (S.boot.version || ''), els.foot);
     h('span', null, 'Log-based, cookie-free analytics', els.foot);
 
+    if (S.listening) return;
+    S.listening = true;
     document.addEventListener('click', closePops);
     document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') { closePops(); C.hideTip(); } });
     window.addEventListener('scroll', C.hideTip, { passive: true });
@@ -475,8 +517,7 @@
         h('span', 'wp-sub', d.has_data ? fmt.num(d.visits_today) + ' today' : t('domain.nodata'), it);
         it.addEventListener('click', function () {
           closePops();
-          var tab = S.tab === 'server' ? 'overview' : S.tab;
-          navigate({ d: d.domain, u: multiUser ? d.user : '', t: tab });
+          navigate({ d: d.domain, u: multiUser ? d.user : '' });
         });
       });
       if (!n) h('div', 'wp-pop-empty', t('domain.none'), list);
@@ -535,9 +576,14 @@
     else els.rangeBtns.custom.textContent = t('range.custom');
     els.rangeSelect.value = S.range;
     els.compareBtn.setAttribute('aria-pressed', S.compare ? 'true' : 'false');
-    var serverTab = S.tab === 'server';
-    els.seg.hidden = serverTab; els.rangeSelect.hidden = serverTab; els.compareBtn.hidden = serverTab;
-    if (serverTab) els.rangeSelect.classList.add('is-hidden'); else els.rangeSelect.classList.remove('is-hidden');
+    var server = S.view === 'server';
+    els.seg.hidden = server; els.rangeSelect.hidden = server; els.compareBtn.hidden = server; els.tabs.hidden = server;
+    if (els.serverBtn) els.serverBtn.setAttribute('aria-pressed', server ? 'true' : 'false');
+    els.pdfBtn.href = location.pathname + location.search + reportHash();
+    var hint = t(server ? 'report.server.hint' : 'report.button.hint');
+    els.pdfBtn.title = hint;
+    els.pdfBtn.setAttribute('aria-label', t('report.button') + ' — ' + hint);
+    els.pdfBtn.hidden = !server && !(S.domain && S.domain.has_data);
     // tabs
     clear(els.tabs);
     availableTabs().forEach(function (tab) {
@@ -571,7 +617,7 @@
   }
   function loadLive() {
     var el = S.els.live;
-    if (S.tab === 'server' || !S.domain || !S.domain.has_data) { clear(el); el.hidden = S.tab === 'server'; return; }
+    if (S.view === 'server' || !S.domain || !S.domain.has_data) { clear(el); el.hidden = S.view === 'server'; return; }
     el.hidden = false;
     var dom = S.domain;
     api({ a: 'realtime', domain: dom.domain, user: S.boot.principal.type !== 'user' ? dom.user : null }).then(function (rt) {
@@ -928,8 +974,10 @@
    * CSV export and optional extras rendered above the table.
    */
   function reportCard(grid, o) {
-    var c = card(grid, { title: o.title, sub: o.sub, info: o.info, span: o.span, exportDim: o.dim });
-    var st = { limit: o.limit || 10, sort: o.sort || '' };
+    // On paper every top list shows 25 rows, and tables with 3+ columns get the full width.
+    var span = S.report && o.cols.length > 2 ? 'wide' : o.span;
+    var c = card(grid, { title: o.title, sub: o.sub, info: o.info, span: span, exportDim: o.dim });
+    var st = { limit: S.report ? Math.max(25, o.limit || 10) : o.limit || 10, sort: o.sort || '' };
     function fetchIt() {
       var p = { limit: st.limit };
       if (st.sort) p.sort = st.sort;
@@ -1273,7 +1321,7 @@
   }
 
   function tabVisits(root, ov) {
-    var note = h('p', 'wp-hint', t('visits.retention', { n: ov ? ov.meta.raw_retention_days : 30 }), root);
+    var note = h('p', 'wp-hint', (S.report ? t('report.visits') + ' ' : '') + t('visits.retention', { n: ov ? ov.meta.raw_retention_days : 30 }), root);
     note.style.margin = '0 0 12px';
     var list = h('div', 'wp-visits', null, root);
     var more = h('div', 'wp-more', null, root);
@@ -1282,11 +1330,12 @@
       clear(more);
       var b = btn('', t('common.loading'), null, more);
       b.disabled = true;
-      api(scoped({ a: 'visits_log', limit: 25, before: before, before_id: beforeId })).then(function (d) {
+      api(scoped({ a: 'visits_log', limit: S.report ? 50 : 25, before: before, before_id: beforeId })).then(function (d) {
         if (token !== S.seq) return;
         clear(more);
         if (!d.visits.length && !before) { h('div', 'wp-state', null, list).appendChild(document.createTextNode(t('visits.empty'))); return; }
         d.visits.forEach(function (v) { visitRow(list, v); });
+        if (S.report) return;
         if (d.next_before) btn('', t('visits.load_more'), function () { page(d.next_before, d.next_before_id); }, more);
         else if (before) h('span', 'wp-hint', t('visits.end'), more);
       }).catch(function (e) {
@@ -1472,9 +1521,9 @@
     syncHeader();
     clear(els.notice);
     var domKey = S.domain ? S.domain.user + '/' + S.domain.domain : '';
-    if (domKey !== S.liveKey || S.tab === 'server') { S.liveKey = domKey; startLive(); }
+    if (domKey !== S.liveKey || S.view !== S.liveView) { S.liveKey = domKey; S.liveView = S.view; startLive(); }
 
-    if (S.tab === 'server') {
+    if (S.view === 'server') {
       els.hero.hidden = true;
       els.live.hidden = true;
       clear(els.content);
@@ -1528,6 +1577,146 @@
     });
   }
 
+  /* -------------------------------------------------------------- report */
+  /* `#report&d=…&r=…` renders every tab in sequence for printing / Save as PDF;
+   * `#report=server` the WHM server report. Prints once everything has loaded,
+   * unless the URL carries `noprint=1` (headless rendering). */
+  var REPORT_TABS = ['overview', 'pages', 'acquisition', 'audience', 'technical', 'bots', 'visits'];
+  var stampFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  function settled() {
+    S.pending--;
+    if (S.pending <= 0) setTimeout(reportCheck, 400);
+  }
+  function reportCheck() {
+    if (!S.report || S.pending > 0 || !S.reportBuilt || S.reportDone) return;
+    S.reportDone = true;
+    S.els.status.textContent = t('report.ready');
+    S.root.setAttribute('data-report-ready', '1');
+    var noprint = /[?&]noprint=1(&|$)/.test(location.search) || parseHash().noprint === '1';
+    if (!S.printed && !noprint) { S.printed = true; setTimeout(function () { window.print(); }, 200); }
+  }
+  /** Inside cPanel chrome the app is nested deep in Jupiter's layout: hide
+   *  everything around it on paper and flatten its ancestors. */
+  function printHost() {
+    var n = S.root;
+    while (n && n !== document.body && n.parentNode && n.parentNode.nodeType === 1) {
+      var par = n.parentNode;
+      for (var c = par.firstElementChild; c; c = c.nextElementSibling) if (c !== n) c.classList.add('wp-print-hide');
+      par.classList.add('wp-print-host');
+      n = par;
+    }
+  }
+  function rangeText(r) {
+    return dateFmtY.format(parseDay(r.from)) + ' – ' + dateFmtY.format(parseDay(r.to));
+  }
+  function reportSection(parent, title, foot) {
+    var sec = h('section', 'wp-rpt-sec', null, parent);
+    h('h2', 'wp-rpt-h', title, sec);
+    var body = h('div', 'wp-rpt-body', null, sec);
+    var f = h('p', 'wp-rpt-foot', null, sec);
+    h('span', null, foot, f);
+    h('span', null, 'WebPulse ' + (S.boot.version || ''), f);
+    return { el: sec, body: body };
+  }
+
+  function renderReport(p) {
+    S.report = true; S.reportBuilt = false; S.reportDone = false; S.pending = 0; S.seq++;
+    var server = p.report === 'server' && S.isAdmin;
+    if (!server) readState(p);
+    if (S.liveTimer) { clearInterval(S.liveTimer); S.liveTimer = 0; }
+    var root = S.root;
+    clear(root);
+    applyTheme();
+    root.removeAttribute('data-report-ready');
+    printHost();
+    var els = S.els = {};
+    var doc = h('div', 'wp-rpt', null, root);
+    var bar = h('div', 'wp-rpt-bar', null, doc);
+    var save = btn('is-primary', null, function () { S.printed = true; window.print(); }, bar);
+    save.appendChild(svgIcon('report'));
+    h('span', null, t('report.save'), save);
+    var back = h('a', 'wp-btn', t('report.back'), bar);
+    back.href = location.pathname + location.search + (server ? '#server' : stateHash({ t: 'overview' }));
+    els.status = h('span', 'wp-rpt-status', t('report.loading'), bar);
+    els.status.setAttribute('role', 'status');
+
+    var cover = h('header', 'wp-rpt-cover', null, doc);
+    var brand = h('div', 'wp-brand', null, cover);
+    brand.appendChild(logo());
+    h('span', null, t('app.name'), brand);
+    h('p', 'wp-rpt-kind', t(server ? 'report.server.title' : 'report.title'), cover);
+    var pr = S.boot.principal;
+    var scope = pr.type === 'reseller' ? t('report.scope.reseller', { name: pr.name }) : t('report.scope.all');
+    var title = server ? (S.boot.hostname || scope) : (S.domain ? S.domain.domain : t('state.nodomains.title'));
+    h('h1', 'wp-rpt-title', title, cover);
+    var meta = h('dl', 'wp-rpt-meta', null, cover);
+    function row(k, v) { var d = h('div', null, null, meta); h('dt', null, k, d); return h('dd', null, v, d); }
+    var rangeDd = row(t('report.range'), server ? t('report.server.range') : t('common.loading'));
+    var prevDd = row(t('report.compare'), '');
+    prevDd.parentNode.hidden = true;
+    if (server && S.boot.hostname) row(t('report.accounts'), scope);
+    if (!server && S.domain && S.isAdmin) row(t('report.account'), S.domain.user);
+    if (S.boot.hostname && !server) row(t('report.server'), S.boot.hostname);
+    row(t('report.generated'), stampFmt.format(new Date()));
+    row(t('report.version'), 'WebPulse ' + (S.boot.version || ''));
+    var toc = h('div', 'wp-rpt-toc', null, cover);
+    h('h2', null, t('report.contents'), toc);
+    var tocList = h('ol', null, null, toc);
+    var names = server ? [t('server.button'), t('report.accounts'), t('report.jobs')] : REPORT_TABS.map(function (x) { return t('tab.' + x); });
+    names.forEach(function (n) { h('li', null, n, tocList); });
+
+    function built() { S.reportBuilt = true; if (!S.pending) setTimeout(reportCheck, 400); }
+    function failed(msg) {
+      S.reportDone = true;
+      els.status.textContent = msg;
+      stateBox(doc, t('state.error.title'), msg);
+    }
+    if (server) {
+      if (window.WebPulseAdmin && window.WebPulseAdmin.report) {
+        var ctx = adminCtx();
+        var sfoot = (S.boot.hostname || scope) + ', ' + dateFmtY.format(new Date());
+        ctx.section = function (name) { return reportSection(doc, name, sfoot); };
+        window.WebPulseAdmin.report(doc, ctx);
+      }
+      built();
+      return;
+    }
+    if (!S.domain || !S.domain.has_data) { failed(S.domain ? t('state.nodata.body') : t('state.nodomains.body')); return; }
+    var token = S.seq;
+    api(scoped({ a: 'overview', compare: S.compare ? 1 : null })).then(function (ov) {
+      if (token !== S.seq) return;
+      S.overview = ov;
+      rangeDd.textContent = rangeText(ov.range) + ' (' + t('range.' + S.range) + ')';
+      if (S.compare && ov.range.prev) { prevDd.textContent = rangeText(ov.range.prev); prevDd.parentNode.hidden = false; }
+      var foot = S.domain.domain + ', ' + rangeText(ov.range);
+      REPORT_TABS.forEach(function (tab) {
+        var c = reportSection(doc, t('tab.' + tab), foot).body;
+        switch (tab) {
+          case 'overview':
+            var hero = h('section', 'wp-hero', null, c);
+            els.kpis = h('div', 'wp-kpis', null, hero);
+            els.chartHead = h('div', 'wp-chart-head', null, hero);
+            els.chart = h('div', 'wp-main-chart', null, hero);
+            renderKpis(ov);
+            renderMainChart(ov);
+            tabOverview(h('div', 'wp-rpt-gap', null, c), ov);
+            break;
+          case 'pages': tabPages(c); break;
+          case 'acquisition': tabAcquisition(c); break;
+          case 'audience': tabAudience(c); break;
+          case 'technical': tabTechnical(c); break;
+          case 'bots': tabBots(c); break;
+          case 'visits': tabVisits(c, ov); break;
+        }
+      });
+      built();
+    }).catch(function (err) {
+      if (token !== S.seq) return;
+      failed(err.code === 'no_data' ? t('state.nodata.body') : err.message);
+    });
+  }
+
   function adminCtx() {
     return {
       api: api, apiHref: apiHref, t: t, I: I, C: C, fmt: fmt, h: h, clear: clear, card: card, load: load, btn: btn, info: info,
@@ -1551,16 +1740,15 @@
       root: root, boot: boot, apiUrl: boot.apiUrl || 'api', domains: boot.domains || [], cache: {}, seq: 0, q: '',
       defaults: { range: (boot.defaults && boot.defaults.range) || '30d' },
       theme: saved || (boot.defaults && boot.defaults.dark) || 'auto',
-      tab: 'overview', range: '30d', metrics: ['visits', 'pageviews'], compare: false, domain: null
+      tab: 'overview', range: '30d', metrics: ['visits', 'pageviews'], compare: false, domain: null,
+      isAdmin: boot.principal.type !== 'user', view: 'domain', mode: null, report: false, pending: 0
     };
-    buildShell();
-    applyTheme();
     if (window.matchMedia) {
       var mq = window.matchMedia('(prefers-color-scheme: dark)');
       if (mq.addEventListener) mq.addEventListener('change', applyTheme);
     }
-    window.addEventListener('hashchange', applyHash);
-    applyHash();
+    window.addEventListener('hashchange', route);
+    route();
   }
 
   window.WebPulseApp = { start: start };

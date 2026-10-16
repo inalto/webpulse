@@ -4,12 +4,16 @@ The WHM plugin is where the server administrator (and resellers, within their ow
 what gets collected, tunes the settings and runs jobs. Open it under **WHM » Plugins » WebPulse
 Analytics**, or go to `https://<server>:2087/cgi/webpulse/index.cgi`.
 
-![The Server tab](https://raw.githubusercontent.com/inalto/webpulse/main/docs/screenshots/server-1280-dark.png)
+![The server view](https://raw.githubusercontent.com/inalto/webpulse/main/docs/screenshots/server-view-1280.png)
 
-The page is the normal dashboard plus an extra first tab, **Server**. The other tabs show any domain
-you pick in the domain picker; the cPanel-only **Settings** tab is not shown in WHM.
+The page is the normal dashboard plus a **Server** button next to the domain picker. The plugin opens
+on the server view; pick a domain in the domain picker (or click one under **Top domains** or
+**Accounts**) to see its tabs, and press **Server** to come back. The date range, **Compare** and the
+live line apply to domains only and are hidden in the server view. The address of the server view
+ends in `#server`, so it can be bookmarked and the browser's Back button works. The cPanel-only
+**Settings** tab is not shown in WHM.
 
-## The Server tab
+## The server view
 
 ### Server overview
 
@@ -85,12 +89,21 @@ The job table shows the number, type, scope, when it started, how long it took, 
 processed and its status (`running`, `ok`, `error`, `skipped`). It refreshes by itself while a job is
 running. The history keeps the last 500 jobs.
 
+### Server report (PDF)
+
+In the server view, **Download PDF** (the document icon in the header) opens a printable server
+report in a new tab: the server name, the overview tiles, every domain with data (not only the top
+10), the accounts with their state and switch setting, and the 20 most recent jobs. The settings are
+not included. The print dialog opens once everything has loaded; choose **Save as PDF**. A reseller's
+report covers its own accounts only. From a domain's tabs the same button prints that domain's report
+(see [[Using the Dashboard]]).
+
 ## Resellers
 
 A reseller can open the plugin and sees only the accounts it owns (the `OWNER=` line in
 `/var/cpanel/users/<account>`). Root owns its own accounts. Within that scope a reseller can:
 
-- see the Server tab, the top domains and any of its accounts' dashboards,
+- see the server view, the top domains and any of its accounts' dashboards,
 - change the Default/On/Off switches of its accounts and their domains,
 - run **collection** and **backfill** for one of its accounts (a reseller must pick an account).
 
