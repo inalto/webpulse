@@ -6,29 +6,34 @@ things, where the code lives and the rules for contributions.
 
 ## Requirements
 
-PHP 8.1 or later with `pdo_sqlite` (plus `json`; `mbstring`, `zlib` and `posix` are optional), and `make`.
-Node.js is optional: if present, `make lint` also checks the JavaScript syntax. `shellcheck` is used by CI
-for the shell scripts.
+A stable Rust toolchain ([rustup](https://rustup.rs)) and a C compiler (SQLite is bundled), plus `make`.
+Optional: `php` 8.1 or later with `pdo_sqlite` (it runs the packaging tests and the parity harness; PHP is
+not used by the program any more), `sqlite3`, `jq`, `shellcheck` and Node.js (JavaScript syntax check).
 
 ```bash
 git clone https://github.com/inalto/webpulse.git
 cd webpulse
+export PATH=$HOME/.cargo/bin:$PATH
+cargo build --release          # -> target/release/webpulse
 ```
 
 ## Make targets
 
 | Command | What it does |
 |---------|--------------|
-| `make test` | `php -l` on every PHP file (and `node --check` on the JavaScript if Node is installed), then the test suite `php tests/run.php`. |
-| `make lint` | Only the syntax checks. |
-| `make fixtures` | Build `tests/tmp/dev/`: 45 days of generated sample logs (seed 42), a development config, then setup, collect, backfill and rollup. |
+| `make build` | `cargo build --release`. |
+| `make test` | `cargo test --release`, then the packaging tests (`php tests/run.php pkg_`) and the parity harness (`tests/parity/run.sh`) when `php` is installed. |
+| `make lint` | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, shellcheck and `php -l` of the cPanel shims. |
+| `make fmt` | `cargo fmt`. |
+| `make fixtures` | Build `tests/tmp/dev/`: 45 days of generated sample logs (seed 42), a development config, then setup, collect, backfill and rollup, all with the Rust binary. |
 | `make serve` | Build the sample environment if needed and serve the dashboard on `127.0.0.1:8099` as the account `alice`. |
 | `make serve-admin` | Same, with the WHM administrator view (Server tab). |
 | `make geoip-fixture` | Download the free DB-IP country database into `tests/fixtures/geoip/` (needs internet). The dev environment then shows countries; GeoIP tests are skipped without it. |
-| `make dist` | Build `dist/webpulse-<version>.tar.gz` from a clean `git archive` (what `install.sh` downloads for a tag). Needs git. |
+| `make dist` | Build the source tarball `dist/webpulse-<version>.tar.gz` from a clean `git archive`. Needs git. |
+| `make release` | Build the binary tarball `dist/webpulse-<version>-<target>.tar.gz` and its `.sha256` (`TARGET=aarch64-unknown-linux-musl`, `ZIG=1` for `cargo zigbuild`). |
 | `make clean` | Remove `tests/tmp` and `dist`. |
 
-Variables: `PHP` (the interpreter, default `php`) and `PORT` (default `8099`).
+Variables: `CARGO`, `PHP` (default `php`), `PORT` (default `8099`), `TARGET`, `ZIG`.
 
 ## The dev server
 
@@ -41,9 +46,9 @@ URL; requests without the token are refused. The server listens on `127.0.0.1` o
 it yourself against your own config:
 
 ```bash
-WEBPULSE_CONFIG=tests/tmp/dev/config.json php bin/webpulse serve --port 8099 --user alice
-php bin/webpulse serve --admin        # the WHM administrator principal
-php bin/webpulse serve --reseller reseller1
+WEBPULSE_CONFIG=tests/tmp/dev/config.json target/release/webpulse serve --port 8099 --user alice
+target/release/webpulse serve --admin        # the WHM administrator principal
+target/release/webpulse serve --reseller reseller1
 ```
 
 ## Running the engine without cPanel
@@ -60,64 +65,66 @@ home/alice/logs/example.com-Sep-2026.gz
 ```
 
 ```bash
-WEBPULSE_CONFIG=tests/tmp/dev/config.json php bin/webpulse collect
-WEBPULSE_CONFIG=tests/tmp/dev/config.json php bin/webpulse report --user alice --domain example.com
+WEBPULSE_CONFIG=tests/tmp/dev/config.json target/release/webpulse collect
+WEBPULSE_CONFIG=tests/tmp/dev/config.json target/release/webpulse report --user alice --domain example.com
 ```
 
-The sample logs come from `tests/gen_logs.php`, a generator with a seed (diurnal traffic, bots, referrers,
+The sample logs come from `webpulse dev gen-logs`, a generator with a seed (diurnal traffic, bots, referrers,
 404s, downloads, IPv6, malformed lines, an SSL log and an archive).
 
 ## Tests
 
-`tests/run.php` is a dependency-free runner. Every `tests/cases/*.php` file returns an array of test
-names and callables; a test fails when it throws.
-
 ```bash
-php tests/run.php                 # everything
-php tests/run.php engine_         # files whose name contains "engine_"
-php tests/run.php "sessionizer"   # a filter also matches the test name
-WEBPULSE_SKIP_PERF=1 php tests/run.php
+cargo test --release              # unit and integration tests of the Rust code
+php tests/run.php pkg_            # packaging tests: installer, shims, hooks, release tarballs
+php tests/run.php pkg_hooks       # one file; a filter also matches the test name
+tests/parity/run.sh               # Rust vs the 0.1.0 PHP engine (needs php >= 8.1)
 ```
 
-Case files are grouped by prefix: `engine_*` (parser, classifier, sessionizer, collector, rollup,
-registry, GeoIP, performance), `ui_*` (API, authorization, ranges, page), `pkg_*` (installer, packaging,
-hooks, front-ends, dist), `sec_*` (file handling, tenant isolation, web hardening). The installer test
-runs `install.sh` in a temporary directory with `WEBPULSE_PREFIX` and `WEBPULSE_FAKE_CPANEL=1`; this is
-the only coverage of the installer, so it cannot show how the real cPanel tools behave.
+The packaging tests (`tests/cases/pkg_*.php`) use PHP only as a runner: `tests/run.php` is a small
+dependency-free runner and a test fails when it throws. They run `install.sh` in a temporary directory with
+`WEBPULSE_PREFIX` and `WEBPULSE_FAKE_CPANEL=1`, a stub binary in the release layout and `file://` downloads
+(checksum verification, missing release asset, `--binary`, `--build` with a fake `cargo`), run the PHP and
+bash shims against a stub binary that prints a CGI response, and check the hooks, the tarballs and the
+static files. They cannot show how the real cPanel tools behave. The parity harness checks out tag
+`v0.1.0`, runs the PHP engine and the Rust binary on the same generated logs and compares tables, counters
+and the JSON of every API action.
+
+## Releases
+
+Bump `VERSION` and the `version` in `Cargo.toml`, update `CHANGELOG.md`, commit and push a tag `vX.Y.Z`.
+`.github/workflows/release.yml` builds static `x86_64` and `aarch64` musl binaries with `cargo-zigbuild`,
+packs them with `scripts/build_release.sh` (tarball + `.sha256`), builds the source tarball and uploads
+everything to the GitHub release; `install.sh` installs from there. CI (`ci.yml`) runs `cargo fmt --check`,
+`cargo clippy -D warnings`, `cargo test`, the packaging tests, the parity harness and shellcheck.
 
 ## Code layout
 
 ```
-bin/webpulse            CLI entry point; dispatches WebPulse\Cli\Command\*
-lib/autoload.php        PSR-4 autoloader for WebPulse\ (no Composer)
-lib/WebPulse/           App, Config, Paths, Log, Util, Registry, Discovery, Log (parser), Classify,
-                        Collect, Store, Rollup, Reports, Http (API, pages, principals), Dev, Cli
-ui/                     app.js, admin.js, charts.js, i18n.js, app.css (inlined into the page)
-cpanel/                 cPanel plugin: install.json, icon, index.live.php, api.live.php
-whm/                    WHM plugin: AppConfig, CGI scripts, icon
-hooks/                  Standardized Hook scripts
+Cargo.toml, src/        the program (one crate, one binary): engine, reports, http, cli
+ui/                     app.js, admin.js, charts.js, i18n.js, app.css (embedded in the binary)
+cpanel/                 cPanel plugin: install.json, icon, index.live.php + api.live.php (PHP shims), lib/
+whm/                    WHM plugin: AppConfig, bash CGI shims, icon
+hooks/                  Standardized Hook scripts (bash)
 etc/                    config.json.default, cron.d/webpulse
 install.sh, uninstall.sh, installer/lib.sh   the installer
-scripts/                build_dist.sh, make_icons.py, publish_wiki.sh
-tests/                  run.php, cases/, fixtures/, support/, gen_logs.php
+scripts/                build_release.sh, build_dist.sh, devenv.sh, geoip_fixture.sh, make_icons.py, publish_wiki.sh
+tests/                  Rust integration tests, parity/, cases/pkg_*.php + run.php, fixtures/
 docs/                   technical documentation
 wiki/                   the pages of this wiki
 ```
 
 ## Contributing rules
 
-- PHP 8.1 or later, `declare(strict_types=1)`, typed properties, no dynamic properties, `final` classes
-  by default, no global state except `WebPulse\App`.
-- **No external PHP or JavaScript dependencies, ever.** Allowed extensions: `pdo_sqlite`, `json`,
-  `mbstring` (optional), `zlib` (optional), `posix` (optional).
-- Errors are exceptions inside and exit codes or JSON errors at the edge. The collector never dies on a
+- Rust 2024; `cargo fmt` and `cargo clippy --all-targets -- -D warnings` must be clean. Keep the dependency
+  list short and the binary static.
+- Errors are `Result`s inside and exit codes or JSON errors at the edge. The collector never dies on a
   bad line or a bad file: it logs and continues.
 - Every user-visible UI string goes through `t()` and lives in `ui/i18n.js` (English only for now).
 - Values from logs and requests are untrusted: use `textContent`, prepared statements and whitelisted
   names.
-- Add tests with your change, and run `make test` before you open a pull request. CI runs it on PHP 8.1
-  and 8.3 and runs shellcheck on `install.sh`, `uninstall.sh`, `installer/lib.sh`, `hooks/*.sh` and
-  `scripts/*.sh`.
+- The PHP and bash shims stay thin; logic belongs in the binary, where `cargo test` covers it.
+- Add tests with your change, and run `make test` before you open a pull request.
 - Metric definitions in `docs/METRICS.md` are normative: the engine, tests and dashboard tooltips must
   agree with them. Update the document when behaviour changes.
 

@@ -8,9 +8,9 @@ is a summary; the full text is in
 
 ## Design goals
 
-- **Lightweight.** PHP 8.1 or later (the PHP that ships with cPanel), SQLite through `pdo_sqlite`, no
-  Composer, no daemon, no external service, no tracker on customer sites. The dashboard is plain
-  JavaScript with inline SVG charts and no chart library.
+- **Lightweight.** One static Rust binary with SQLite built in (since 0.2.0; 0.1.0 was PHP). No
+  interpreter, no daemon, no external service, no tracker on customer sites. The dashboard is plain
+  JavaScript with inline SVG charts and no chart library, embedded in the binary.
 - **Log based.** Everything comes from the per-domain access logs that cPanel already writes.
 - **Rotation proof.** State is kept in SQLite. A cPanel hook reads the logs before they are truncated.
 - **Isolated per account.** One database per domain, readable only by root and the owning account.
@@ -26,11 +26,11 @@ access logs  ->  webpulse collect (root)  ->  /var/webpulse/data/<user>/<domain>
 
 | Piece | Role |
 |-------|------|
-| `bin/webpulse` | The command line program. Cron and the hooks run it as root. |
+| `bin/webpulse` | The program: command line, collector, JSON API, page renderer and `webpulse cgi`. Cron and the hooks run it as root; the cPanel shim runs it as the account. |
 | Registry (`/var/webpulse/webpulse.db`) | Accounts, domains, On/Off switches, run-time settings, daily salts, job history, a per-domain summary for the WHM overview. |
 | Domain databases | Daily and hourly aggregates, one table for all report dimensions, open and closed visits, raw events, log checkpoints. |
-| cPanel plugin | A PHP page run by cPanel as the account user. Opens that account's databases read-only. |
-| WHM plugin | PHP CGI scripts run by `cpsrvd` as root. Sees all accounts (or a reseller's). |
+| cPanel plugin | Two thin PHP shims (cPanel requires LiveAPI pages to be PHP) run by cPanel as the account user. They identify the account from the cPanel session and run `webpulse cgi --principal user:<account>`, which opens that account's databases read-only. |
+| WHM plugin | Two bash CGI shims run by `cpsrvd` as root; they `exec webpulse cgi --whm`. Sees all accounts (or a reseller's). |
 | Hooks | Two cPanel Standardized Hooks that make sure logs are read before `cpanellogd` truncates them. |
 
 ## What `collect` does
@@ -111,11 +111,11 @@ and so on, not with traffic.
 
 ## Performance
 
-Measured on the development machine with generated logs: about **30 000 log lines per second** and
-**26 MiB** peak memory (figures from the project's README). The design target is at least 20 000 lines
-per second, and the test suite includes a performance test on generated logs. Real servers vary with disk
-speed and log content. At that rate a million lines take roughly half a minute. Because of the
-checkpoints, the routine 5-minute run only reads the lines written since the previous one.
+The 0.1.0 PHP engine read about **30 000 log lines per second** in **26 MiB** on the development machine
+with generated logs. The Rust engine is designed to be several times faster and lighter (no interpreter,
+no `memory_limit` or `max_execution_time`); the numbers are to be re-measured on the release build. Real
+servers vary with disk speed and log content. Because of the checkpoints, the routine 5-minute run only
+reads the lines written since the previous one.
 
 Aggregated reports grow with the number of distinct values (pages, referrers, countries), not with
 traffic, and are capped per day by `max_rows_per_dim`. The visits log does grow with traffic, which is

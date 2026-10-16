@@ -1,5 +1,4 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2016  # PHP snippets are deliberately single-quoted
 # WebPulse installer library. Sourced by install.sh (never executed directly).
 #
 # Entry points: wp_install, wp_uninstall. Everything is driven by the WP_*
@@ -14,6 +13,13 @@
 #   WEBPULSE_CRON_DIR       cron.d dir   (default: $PREFIX/etc/cron.d)
 #   WEBPULSE_APPS_DIR       AppConfig dir (default: $PREFIX/var/cpanel/apps)
 #   WEBPULSE_SKIP_FIRST_COLLECT=1  do not start the first collect in the background
+#
+# WebPulse is a single static binary. install.sh obtains the release layout
+# (bin/webpulse, cpanel/, whm/, hooks/, etc/, installer/, VERSION, ...) and sets
+#   SRC          directory with that layout
+#   WP_BIN_SRC   the binary to install (default: $SRC/bin/webpulse)
+# Nothing here needs PHP; cPanel's own PHP is only checked (informational) because
+# the cPanel dashboard shims (*.live.php) run on it.
 
 # ---------------------------------------------------------------- output ---
 
@@ -70,7 +76,6 @@ wp_init_env() {
     WP_ROLLING_BACK=0
     WAS_INSTALLED=0
     PREV_TARGET=''
-    PHP_BIN=''
     REL=''
     VERSION=''
     WP_THEMES=()
@@ -206,48 +211,19 @@ wp_swap_symlink() { # target link
 
 wp_escape_sed() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 
-wp_php_ok() { # php-binary -> 0 when >= 8.1 with pdo_sqlite
-    local php=$1 id
-    [ -x "$php" ] || return 1
-    id=$("$php" -r 'echo PHP_VERSION_ID;' 2>/dev/null) || return 1
-    case "$id" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$id" -ge 80100 ] || return 1
-    "$php" -m 2>/dev/null | tr -d '\r' | grep -qix 'pdo_sqlite'
-}
-
-wp_detect_php() {
-    local candidates=() c found='' tried=''
-    candidates+=("$CPANEL_PHP")
-    c=$(command -v php 2>/dev/null || true)
-    [ -n "$c" ] && candidates+=("$c")
-    for c in "${candidates[@]}"; do
-        tried="$tried $c"
-        if wp_php_ok "$c"; then
-            found=$c
-            break
-        fi
-    done
-    if [ -z "$found" ]; then
-        wp_err "No suitable PHP found. WebPulse needs PHP >= 8.1 with the pdo_sqlite extension."
-        wp_err "Tried:${tried:- (nothing)}"
-        exit 1
+# Informational: the two LiveAPI shims of the cPanel dashboard need cPanel's PHP.
+wp_check_cpanel_php() {
+    local php=''
+    if [ -x "$CPANEL_PHP" ]; then
+        php=$CPANEL_PHP
+    else
+        php=$(command -v php 2>/dev/null || true)
     fi
-    PHP_BIN=$found
-}
-
-wp_json_patch() { # config-file php-code args...   (php code receives $c, writes it back)
-    local file=$1 code=$2
-    shift 2
-    "$PHP_BIN" -r '
-$f = $argv[1];
-$c = json_decode((string) file_get_contents($f), true);
-if (!is_array($c)) { fwrite(STDERR, "invalid JSON in $f\n"); exit(1); }
-'"$code"'
-$tmp = $f . ".tmp" . getmypid();
-file_put_contents($tmp, json_encode($c, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
-chmod($tmp, 0600);
-rename($tmp, $f);
-' -- "$file" "$@"
+    if [ -n "$php" ]; then
+        wp_info "PHP for the cPanel page shims: $php ($("$php" -r 'echo PHP_VERSION;' 2>/dev/null || echo unknown))"
+    else
+        wp_warn "cPanel's PHP ($CPANEL_PHP) was not found. The cPanel dashboard page runs on it; WHM and the CLI do not need PHP."
+    fi
 }
 
 # ------------------------------------------------------------- preflight ---
@@ -258,7 +234,7 @@ wp_preflight_common() {
         exit 1
     fi
     local tool
-    for tool in tar cp mv ln rm mkdir chmod find sed grep diff; do
+    for tool in tar cp mv ln rm mkdir chmod find sed grep diff awk; do
         command -v "$tool" >/dev/null 2>&1 || { wp_err "Required tool not found: $tool"; exit 1; }
     done
 }
@@ -280,12 +256,12 @@ wp_preflight_cpanel() {
 
 # --------------------------------------------------------------- staging ---
 
-# Copies the allow-listed parts of $SRC into $1 (a fresh directory).
+# Copies the allow-listed parts of $SRC into $1 (a fresh directory). The binary is
+# installed separately (wp_stage_release), whatever $SRC/bin contains.
 wp_copy_tree() {
     local dest=$1 item
     mkdir -p "$dest"
-    for item in bin lib ui cpanel whm hooks etc installer scripts docs \
-        VERSION LICENSE README.md CHANGELOG.md install.sh uninstall.sh Makefile; do
+    for item in cpanel whm hooks etc installer VERSION LICENSE README.md CHANGELOG.md install.sh uninstall.sh; do
         if [ -e "$SRC/$item" ]; then
             cp -a "$SRC/$item" "$dest/$item"
         fi
@@ -294,7 +270,9 @@ wp_copy_tree() {
 
 wp_stage_release() {
     wp_head "Staging release"
-    [ -f "$SRC/bin/webpulse" ] || wp_fail "Source $SRC does not contain bin/webpulse"
+    local bin_src="${WP_BIN_SRC:-$SRC/bin/webpulse}"
+    [ -f "$bin_src" ] || wp_fail "No WebPulse binary found ($bin_src does not exist)"
+    [ -s "$bin_src" ] || wp_fail "The WebPulse binary $bin_src is empty"
     [ -f "$SRC/VERSION" ] || wp_fail "Source $SRC does not contain a VERSION file"
     VERSION=$(tr -d ' \t\r\n' <"$SRC/VERSION")
     case "$VERSION" in
@@ -306,15 +284,8 @@ wp_stage_release() {
     wp_safe_rm_rf "$stage"
     wp_undo wp_safe_rm_rf "$stage"
     wp_copy_tree "$stage"
-
-    # run the CLI with the PHP we validated (cPanel's own build when possible)
-    local first
-    first=$(head -n 1 "$stage/bin/webpulse")
-    case "$first" in
-        '#!'*) ;;
-        *) wp_fail "bin/webpulse does not start with a shebang line" ;;
-    esac
-    sed -i "1s|^#!.*|#!$(wp_escape_sed "$PHP_BIN")|" "$stage/bin/webpulse"
+    mkdir -p "$stage/bin"
+    cp -f "$bin_src" "$stage/bin/webpulse"
 
     find "$stage" -type d -exec chmod 755 {} +
     find "$stage" -type f -exec chmod go+r,go-w {} +
@@ -324,6 +295,16 @@ wp_stage_release() {
         [ -f "$f" ] && chmod 755 "$f"
     done
     wp_chown_root "$stage"
+
+    # does the binary run on this machine (architecture, libc, noexec mount)?
+    local bin_version
+    if ! bin_version=$("$stage/bin/webpulse" --version 2>&1); then
+        wp_err "The WebPulse binary does not run on this machine:"
+        printf '%s\n' "$bin_version" | sed 's/^/    | /' >&2
+        wp_err "It must be a Linux $(uname -m) build (see docs/INSTALL.md, 'Building from source')."
+        wp_rollback
+        exit 1
+    fi
 
     REL="$RELEASES/$VERSION"
     if [ -d "$REL" ] && diff -rq "$stage" "$REL" >/dev/null 2>&1; then
@@ -337,31 +318,47 @@ wp_stage_release() {
         wp_undo wp_safe_rm_rf "$REL"
         wp_ok "Release staged in $REL"
     fi
-    wp_info "PHP: $PHP_BIN ($("$PHP_BIN" -r 'echo PHP_VERSION;'))"
+    wp_info "Binary:  $(printf '%s' "$bin_version" | head -n 1)"
+    if [ "${WP_STANDALONE:-0}" != 1 ]; then
+        wp_check_cpanel_php
+    fi
 }
 
+# `webpulse setup` writes a pristine config itself. When the installer is
+# redirected (WEBPULSE_PREFIX / WEBPULSE_VAR) the paths inside must follow, so the
+# shipped default is rewritten first: absolute strings inside the "paths" object and
+# the GeoIP database paths get the prefix (/var/webpulse follows WEBPULSE_VAR),
+# cron_file points at the redirected cron file; placeholders such as {user} stay.
 wp_seed_config() {
-    # A pristine config is normally created by "webpulse setup". When the
-    # installer is redirected (WEBPULSE_PREFIX/VAR) the paths inside must follow.
     [ -f "$CFG_FILE" ] && return 0
     [ -z "$PREFIX" ] && [ "$VAR_DIR" = "$DEFAULT_VAR" ] && return 0
     local default="$REL/etc/config.json.default"
     [ -f "$default" ] || return 0
     mkdir -p "$ETC_DIR"
-    cp "$default" "$CFG_FILE"
-    chmod 600 "$CFG_FILE"
     wp_undo rm -f "$CFG_FILE"
-    wp_json_patch "$CFG_FILE" '
-$var = $argv[2]; $prefix = $argv[3]; $cron = $argv[4];
-$fix = static function ($p) use ($var, $prefix) {
-    if (!is_string($p) || $p === "" || $p[0] !== "/") { return $p; }
-    if ($p === "/var/webpulse" || str_starts_with($p, "/var/webpulse/")) { return $var . substr($p, 13); }
-    return $prefix . $p;
-};
-foreach (($c["paths"] ?? []) as $k => $v) { $c["paths"][$k] = is_array($v) ? array_map($fix, $v) : $fix($v); }
-if (isset($c["paths"]["cron_file"])) { $c["paths"]["cron_file"] = $cron; }
-foreach (["country_db", "city_db"] as $k) { if (isset($c["geoip"][$k])) { $c["geoip"][$k] = $fix($c["geoip"][$k]); } }
-' "$VAR_DIR" "$PREFIX" "$CRON_FILE"
+    WP_VAR_DIR="$VAR_DIR" WP_PREFIX="$PREFIX" WP_CRON_FILE="$CRON_FILE" awk '
+function rewrite(line,    out, tok) {
+    out = ""
+    while (match(line, /"\/[^"]*"/)) {
+        tok = substr(line, RSTART + 1, RLENGTH - 2)
+        if (tok == "/var/webpulse" || index(tok, "/var/webpulse/") == 1) {
+            tok = ENVIRON["WP_VAR_DIR"] substr(tok, 14)
+        } else {
+            tok = ENVIRON["WP_PREFIX"] tok
+        }
+        out = out substr(line, 1, RSTART - 1) "\"" tok "\""
+        line = substr(line, RSTART + RLENGTH)
+    }
+    return out line
+}
+/"paths"[ \t]*:[ \t]*\{/ { inpaths = 1; print; next }
+inpaths && /^[ \t]*\}/ { inpaths = 0; print; next }
+inpaths && /"cron_file"/ { print "    \"cron_file\": \"" ENVIRON["WP_CRON_FILE"] "\"" (($0 ~ /,[ \t]*$/) ? "," : ""); next }
+inpaths { print rewrite($0); next }
+/"country_db"|"city_db"/ { print rewrite($0); next }
+{ print }
+' "$default" >"$CFG_FILE" || wp_fail "Cannot seed $CFG_FILE from $default"
+    chmod 600 "$CFG_FILE"
 }
 
 wp_run_setup() {
@@ -419,11 +416,9 @@ wp_copy_theme_files() {
     dest="$base/webpulse"
     stage="$base/.webpulse.new.$$"
     wp_safe_rm_rf "$stage"
-    mkdir -p "$stage/lib"
+    mkdir -p "$stage"
+    # thin PHP shims (index.live.php, api.live.php, lib/*.php) + icon; no PHP library any more
     cp -a "$rel/cpanel/webpulse/." "$stage/"
-    # fallback copy of the code base next to the plugin (see lib/bootstrap.php)
-    cp -a "$rel/lib/." "$stage/lib/"
-    [ -d "$rel/ui" ] && cp -a "$rel/ui" "$stage/ui"
     cp -a "$rel/VERSION" "$stage/VERSION"
     find "$stage" -type d -exec chmod 755 {} +
     find "$stage" -type f -exec chmod 644 {} +
@@ -586,8 +581,9 @@ wp_install_cron() {
 
 wp_setup_geoip() {
     wp_head "GeoIP"
-    wp_json_patch "$CFG_FILE" '$c["geoip"]["enabled"] = true;'
-    wp_ok "geoip.enabled = true in $CFG_FILE"
+    wp_run "enable GeoIP (webpulse config set geoip.enabled true)" \
+        "$REL/bin/webpulse" config set geoip.enabled true
+    wp_ok "geoip.enabled = true (stored in the registry; config file: $CFG_FILE)"
     if wp_try "GeoIP database download" "$REL/bin/webpulse" geoip-update; then
         wp_ok "DB-IP country database downloaded"
     else
@@ -674,7 +670,6 @@ wp_install() {
     wp_init_env
     wp_preflight_common
     [ "${WP_STANDALONE:-0}" = 1 ] || wp_preflight_cpanel
-    wp_detect_php
 
     if [ -e "$INSTALL_LINK/bin/webpulse" ]; then
         WAS_INSTALLED=1

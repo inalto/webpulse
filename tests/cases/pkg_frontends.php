@@ -3,19 +3,20 @@
 declare(strict_types=1);
 
 /*
- * WP3: PHP front-ends (cPanel live.php, WHM CGI): LiveApiUser cascade, WHM edge
- * checks, bootstrap resolution, and smoke runs against the real engine/UI
- * classes when those packages are present.
+ * Front-end shims: the cPanel LiveAPI pages (index.live.php, api.live.php, run on
+ * cPanel's PHP) and the WHM bash CGIs. All logic lives in the binary; these tests
+ * use a stub binary (WEBPULSE_BIN) that records its arguments, environment and stdin
+ * and prints a CGI response, and check LiveApiUser, CgiBridge and the exec arguments.
  */
 
 require_once __DIR__ . '/pkg_support.php';
 
 $repo = PkgSupport::repo();
 require_once "$repo/cpanel/webpulse/lib/LiveApiUser.php";
-require_once "$repo/whm/lib/Edge.php";
+require_once "$repo/cpanel/webpulse/lib/CgiBridge.php";
 
+use WebPulse\Cpanel\CgiBridge;
 use WebPulse\Cpanel\LiveApiUser;
-use WebPulse\Whm\Edge;
 
 /** Run $fn with REMOTE_USER set/unset, restoring it afterwards. */
 $withRemoteUser = static function (?string $value, callable $fn): mixed {
@@ -47,44 +48,31 @@ $fakeCpanel = static function (mixed $result, bool $throw = false): object {
     };
 };
 
-/** Does the engine/UI package exist well enough for a smoke run? */
-$haveStack = static function () use ($repo): bool {
-    foreach (['lib/autoload.php', 'lib/WebPulse/App.php', 'lib/WebPulse/Http/Api.php', 'lib/WebPulse/Http/Page.php',
-        'lib/WebPulse/Http/PageOptions.php', 'lib/WebPulse/Discovery/CpanelUsers.php', 'ui/app.css', 'ui/app.js'] as $f) {
-        if (!is_file("$repo/$f")) {
-            return false;
-        }
-    }
-    return true;
+/**
+ * A stub WebPulse binary: records args/env/stdin in $log.* and prints $response
+ * (a complete CGI response) verbatim, then exits $exit.
+ */
+$stubBinary = static function (string $response, int $exit = 0): array {
+    $dir = PkgSupport::tmpDir('shimbin');
+    $bin = "$dir/webpulse";
+    $respFile = "$dir/response.txt";
+    file_put_contents($respFile, $response);
+    PkgSupport::script($bin, <<<SH
+#!/bin/bash
+log='$dir/call'
+echo "\$*" > "\$log.args"
+env | grep -E '^(REQUEST_METHOD|QUERY_STRING|CONTENT_TYPE|CONTENT_LENGTH|HTTP_X_WEBPULSE_REQUEST|REMOTE_ADDR|REMOTE_USER|WEBPULSE_CONFIG|STUB_CPANEL_USER)=' | sort > "\$log.env"
+cat > "\$log.stdin"
+cat '$respFile'
+exit $exit
+SH);
+    return [$bin, "$dir/call"];
 };
 
-/** A config + fake server root for the smoke runs. @return array{0:string,1:string} config path, root */
-$smokeRoot = static function (): array {
-    $root = PkgSupport::tmpDir('smoke');
-    foreach (['var/cpanel/users', 'var/webpulse/data', 'var/webpulse/log', 'var/webpulse/run', 'etc'] as $d) {
-        mkdir("$root/$d", 0777, true);
-    }
-    file_put_contents("$root/var/cpanel/users/alice", "DNS=example.com\nOWNER=reseller1\n");
-    file_put_contents("$root/var/cpanel/users/bob", "DNS=blog.net\nOWNER=root\n");
-    file_put_contents("$root/etc/userdomains", "example.com: alice\nblog.net: bob\n");
-    $cfg = [
-        'version' => 1,
-        'paths' => [
-            'data_dir' => "$root/var/webpulse/data", 'registry_db' => "$root/var/webpulse/webpulse.db",
-            'log_dir' => "$root/var/webpulse/log", 'run_dir' => "$root/var/webpulse/run",
-            'domlogs_dirs' => ["$root/domlogs/{user}"], 'archive_dir' => "$root/home/{user}/logs",
-            'userdomains_file' => "$root/etc/userdomains", 'cpanel_users_dir' => "$root/var/cpanel/users",
-            'cpanel_userdata_dir' => "$root/var/cpanel/userdata", 'home_root' => "$root/home",
-            'cron_file' => "$root/etc/cron.d-webpulse", 'hooks_file' => "$root/var/cpanel/hooks.yaml",
-        ],
-    ];
-    file_put_contents("$root/config.json", json_encode($cfg));
-    return ["$root/config.json", $root];
-};
-
-$cpanelStub = static function (): string {
-    $f = PkgSupport::tmpDir('stub') . '/prepend.php';
-    file_put_contents($f, <<<'PHP'
+/** PHP prepend/append files: a stub CPANEL class, and a dump of the headers the shim set. */
+$phpHarness = static function (): array {
+    $dir = PkgSupport::tmpDir('phpharness');
+    file_put_contents("$dir/prepend.php", <<<'PHP'
 <?php
 // stands in for /usr/local/cpanel/php/cpanel.php
 class CPANEL {
@@ -94,8 +82,75 @@ class CPANEL {
     public function end() { file_put_contents(getenv('STUB_CPANEL_END') ?: '/dev/null', "end\n", FILE_APPEND); }
 }
 PHP);
-    return $f;
+    file_put_contents("$dir/append.php", <<<'PHP'
+<?php
+file_put_contents(getenv('STUB_HEADERS_OUT') ?: '/dev/null', json_encode(['status' => http_response_code(), 'headers' => headers_list()]));
+PHP);
+    return ["$dir/prepend.php", "$dir/append.php", "$dir/headers.json"];
 };
+
+/** Run a LiveAPI shim under php-cli with the stub CPANEL class. @return array{0:int,1:string,2:array} rc, output, headers dump */
+$runLive = static function (string $shim, array $env, ?string $stdin = null) use ($repo, $phpHarness): array {
+    [$prepend, $append, $headersOut] = $phpHarness();
+    [$rc, $out] = PkgSupport::run([PHP_BINARY, '-d', "auto_prepend_file=$prepend", '-d', "auto_append_file=$append", '-d', 'error_log=/dev/null',
+        '-d', 'display_errors=0', "$repo/cpanel/webpulse/$shim"], $env + ['STUB_HEADERS_OUT' => $headersOut], $stdin);
+    $dump = is_file($headersOut) ? json_decode((string) file_get_contents($headersOut), true) : [];
+    return [$rc, $out, is_array($dump) ? $dump : []];
+};
+
+/**
+ * Serve cpanel/webpulse with PHP's built-in web server (a real SAPI where header() works)
+ * and send one request. @return array{0:int,1:array<string,string>,2:string} status, headers (lower-case names), body
+ */
+$httpLive = static function (string $path, array $env, string $method = 'GET', ?string $body = null, array $reqHeaders = []) use ($repo, $phpHarness): array {
+    [$prepend] = $phpHarness();
+    $port = 0;
+    $sock = @stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+    if ($sock === false) {
+        PkgSupport::skip('cannot allocate a local port');
+    }
+    $port = (int) substr((string) stream_socket_get_name($sock, false), strrpos((string) stream_socket_get_name($sock, false), ':') + 1);
+    fclose($sock);
+    $envFull = array_merge(['PATH' => (string) getenv('PATH'), 'HOME' => (string) getenv('HOME')], $env);
+    $proc = proc_open([PHP_BINARY, '-d', "auto_prepend_file=$prepend", '-d', 'error_log=/dev/null', '-d', 'display_errors=0',
+        '-S', "127.0.0.1:$port", '-t', "$repo/cpanel/webpulse"], [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, null, $envFull);
+    if (!is_resource($proc)) {
+        PkgSupport::skip('cannot start the PHP built-in server');
+    }
+    try {
+        for ($i = 0; $i < 50; $i++) {
+            $c = @fsockopen('127.0.0.1', $port, $e1, $e2, 0.2);
+            if ($c !== false) {
+                fclose($c);
+                break;
+            }
+            usleep(100000);
+        }
+        $headerLines = '';
+        foreach ($reqHeaders as $k => $v) {
+            $headerLines .= "$k: $v\r\n";
+        }
+        $ctx = stream_context_create(['http' => ['method' => $method, 'header' => $headerLines, 'content' => $body ?? '', 'ignore_errors' => true, 'timeout' => 20]]);
+        $resp = @file_get_contents("http://127.0.0.1:$port/$path", false, $ctx);
+        $status = 0;
+        $headers = [];
+        foreach ($http_response_header ?? [] as $i => $line) {
+            if ($i === 0 && preg_match('#^HTTP/\S+ (\d{3})#', $line, $m) === 1) {
+                $status = (int) $m[1];
+            } elseif (str_contains($line, ':')) {
+                [$k, $v] = explode(':', $line, 2);
+                $headers[strtolower(trim($k))] = trim($v);
+            }
+        }
+        return [$status, $headers, (string) $resp];
+    } finally {
+        proc_terminate($proc);
+        proc_close($proc);
+    }
+};
+
+
+$recorded = static fn (string $prefix, string $ext): string => (string) @file_get_contents("$prefix.$ext");
 
 return [
     'pkg_frontends: LiveApiUser::fromResult accepts every uapi() shape' => static function (): void {
@@ -157,219 +212,242 @@ return [
         PkgSupport::assertContains('threw: Unable to determine the cPanel account name', $out);
     },
 
-    'pkg_frontends: WHM Edge::principal maps REMOTE_USER to a principal' => static function () use ($repo): void {
-        require_once "$repo/lib/autoload.php";
-        if (!class_exists(\WebPulse\Http\Principal::class)) {
-            fwrite(STDERR, "SKIP Principal not available\n");
-            return;
-        }
-        $users = new class () {
-            public function all(): array
-            {
-                return [
-                    'zed' => ['owner' => 'res1', 'domains' => [], 'home' => '/home/zed'],
-                    'alice' => ['owner' => 'res1', 'domains' => [], 'home' => '/home/alice'],
-                    'bob' => ['owner' => 'root', 'domains' => [], 'home' => '/home/bob'],
-                    'res1' => ['owner' => 'root', 'domains' => [], 'home' => '/home/res1'],
-                    'odd' => ['owner' => null],
-                ];
+    'pkg_frontends: CgiBridge::parseHead keeps plain headers and drops anything suspicious' => static function (): void {
+        [$status, $lines] = CgiBridge::parseHead("Status: 404 Not Found\r\nContent-Type: application/json\r\nX-A: b\r\nbad line\r\nEvil\x01: x\r\nSet-Cookie: a=b\r\n");
+        PkgSupport::assertSame(404, $status);
+        PkgSupport::assertSame(['Content-Type: application/json', 'X-A: b', 'Set-Cookie: a=b'], $lines);
+        [$status, $lines] = CgiBridge::parseHead("Content-Type: text/html\n");
+        PkgSupport::assertSame(200, $status, 'default status');
+        PkgSupport::assertSame(['Content-Type: text/html'], $lines);
+        [$status] = CgiBridge::parseHead('Status: 503');
+        PkgSupport::assertSame(503, $status);
+    },
+
+    'pkg_frontends: CgiBridge resolves WEBPULSE_BIN, then the default path, then bin/ next to the shim' => static function (): void {
+        $dir = PkgSupport::tmpDir('binres');
+        $env = PkgSupport::script("$dir/env-bin", "#!/bin/sh\n");
+        mkdir("$dir/shim/bin", 0777, true);
+        $near = PkgSupport::script("$dir/shim/bin/webpulse", "#!/bin/sh\n");
+        $old = getenv('WEBPULSE_BIN');
+        try {
+            putenv("WEBPULSE_BIN=$env");
+            PkgSupport::assertSame($env, CgiBridge::binary("$dir/shim"), 'env wins');
+            putenv("WEBPULSE_BIN=$dir/not-executable");
+            file_put_contents("$dir/not-executable", 'x');
+            $r = CgiBridge::binary("$dir/shim");
+            PkgSupport::assertTrue($r === $near || $r === CgiBridge::DEFAULT_BIN, 'unusable env value ignored');
+            putenv('WEBPULSE_BIN');
+            if (!is_executable(CgiBridge::DEFAULT_BIN)) {
+                PkgSupport::assertSame($near, CgiBridge::binary("$dir/shim"), 'next to the shim');
+                PkgSupport::assertSame(null, CgiBridge::binary("$dir/nowhere"), 'nothing found');
             }
-        };
-        $root = Edge::principal('root', $users);
-        PkgSupport::assertSame('admin', $root->type, 'root is admin');
-        PkgSupport::assertSame('root', $root->name);
-        $res = Edge::principal('res1', $users);
-        PkgSupport::assertSame('reseller', $res->type, 'reseller');
-        PkgSupport::assertSame(['alice', 'zed'], $res->ownedUsers, 'owned accounts only, sorted');
-        PkgSupport::assertTrue($res->canSeeUser('alice') && !$res->canSeeUser('bob'), 'scope');
-        foreach ([null, '', '  ', 'nobody', 'bob', 'Root', '../x', 'res1;id', "res1\n", 'ROOT'] as $who) {
-            PkgSupport::assertSame(null, Edge::principal($who, $users), 'forbidden: ' . json_encode($who));
+        } finally {
+            $old === false ? putenv('WEBPULSE_BIN') : putenv("WEBPULSE_BIN=$old");
         }
     },
 
-    'pkg_frontends: WHM Edge mutation guard' => static function (): void {
-        foreach (['admin.set_account', 'admin.set_domain', 'admin.save_settings', 'admin.run', 'admin.purge', 'save_user_settings'] as $a) {
-            PkgSupport::assertTrue(Edge::isMutating($a), "$a is mutating");
-            PkgSupport::assertTrue(!Edge::mutationAllowed($a, 'GET', null), "$a via GET denied");
-            PkgSupport::assertTrue(!Edge::mutationAllowed($a, 'POST', null), "$a without header denied");
-            PkgSupport::assertTrue(!Edge::mutationAllowed($a, 'POST', '0'), "$a with wrong header denied");
-            PkgSupport::assertTrue(Edge::mutationAllowed($a, 'POST', '1'), "$a POST + header allowed");
+    'pkg_frontends: CgiBridge forwards only the CGI variables and WEBPULSE_CONFIG' => static function (): void {
+        $set = ['REQUEST_METHOD' => 'POST', 'QUERY_STRING' => 'a=x', 'CONTENT_TYPE' => 'application/json', 'CONTENT_LENGTH' => '3',
+            'HTTP_X_WEBPULSE_REQUEST' => '1', 'REMOTE_ADDR' => '203.0.113.9', 'WEBPULSE_CONFIG' => '/etc/other.json', 'SECRET_TOKEN' => 'nope'];
+        $old = [];
+        foreach ($set as $k => $v) {
+            $old[$k] = getenv($k);
+            putenv("$k=$v");
         }
-        foreach (['domains', 'overview', 'report', 'admin.overview', 'admin.accounts', 'admin.jobs', 'admin.settings', 'export', 'visits'] as $a) {
-            PkgSupport::assertTrue(!Edge::isMutating($a), "$a is a read");
-            PkgSupport::assertTrue(Edge::mutationAllowed($a, 'GET', null), "$a GET allowed");
-            PkgSupport::assertTrue(Edge::mutationAllowed($a, 'HEAD', null), "$a HEAD allowed");
+        try {
+            $env = CgiBridge::environment('alice');
+        } finally {
+            foreach ($old as $k => $v) {
+                $v === false ? putenv($k) : putenv("$k=$v");
+            }
         }
-        PkgSupport::assertTrue(!Edge::mutationAllowed('overview', 'DELETE', '1'), 'unsafe methods other than POST denied');
-        PkgSupport::assertTrue(!Edge::mutationAllowed('overview', 'PUT', null), 'PUT denied');
+        PkgSupport::assertSame('POST', $env['REQUEST_METHOD']);
+        PkgSupport::assertSame('alice', $env['REMOTE_USER'], 'the resolved account, not a request value');
+        PkgSupport::assertSame('/etc/other.json', $env['WEBPULSE_CONFIG']);
+        PkgSupport::assertSame('203.0.113.9', $env['REMOTE_ADDR']);
+        PkgSupport::assertTrue(!isset($env['SECRET_TOKEN']), 'unrelated variables are not forwarded');
+        PkgSupport::assertTrue(isset($env['PATH']), 'PATH is set');
     },
 
-    'pkg_frontends: WHM Edge::request builds the Request from the CGI environment' => static function () use ($repo): void {
-        require_once "$repo/lib/autoload.php";
-        if (!class_exists(\WebPulse\Http\Request::class)) {
-            fwrite(STDERR, "SKIP Request not available\n");
-            return;
+    'pkg_frontends: api.live.php passes status, headers and body through and pipes the request body' => static function () use ($stubBinary, $httpLive, $recorded): void {
+        [$bin, $call] = $stubBinary("Status: 201 Created\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Test: yes\r\n\r\n{\"ok\":true,\"data\":{\"hello\":\"world\"}}");
+        // a real HTTP request to PHP's built-in server: CGI variables come from $_SERVER, the body from php://input
+        [$status, $headers, $body] = $httpLive('api.live.php?a=save_user_settings&user=bob', [
+            'WEBPULSE_BIN' => $bin, 'STUB_CPANEL_USER' => 'alice', 'WEBPULSE_CONFIG' => '/some/config.json', 'REMOTE_USER' => 'mallory',
+        ], 'POST', '{"theme":"dark"}', ['Content-Type' => 'application/json', 'X-WebPulse-Request' => '1']);
+        PkgSupport::assertSame(201, $status, 'status line becomes the HTTP status');
+        PkgSupport::assertSame('{"ok":true,"data":{"hello":"world"}}', $body, 'body passthrough, nothing else printed');
+        PkgSupport::assertSame('application/json; charset=utf-8', $headers['content-type'] ?? null, 'Content-Type');
+        PkgSupport::assertSame('no-store', $headers['cache-control'] ?? null, 'Cache-Control');
+        PkgSupport::assertSame('yes', $headers['x-test'] ?? null, 'custom header');
+        PkgSupport::assertTrue(!isset($headers['status']), 'the Status line is not echoed as a header');
+
+        PkgSupport::assertSame("cgi --principal user:alice --api\n", $recorded($call, 'args'), 'principal from the cPanel session, never from the request');
+        $seen = $recorded($call, 'env');
+        foreach (['REQUEST_METHOD=POST', 'QUERY_STRING=a=save_user_settings&user=bob', 'CONTENT_TYPE=application/json',
+            'HTTP_X_WEBPULSE_REQUEST=1', 'REMOTE_ADDR=127.0.0.1', 'REMOTE_USER=alice', 'WEBPULSE_CONFIG=/some/config.json', 'CONTENT_LENGTH=16'] as $line) {
+            PkgSupport::assertContains($line . "\n", $seen, 'forwarded variable');
         }
-        $r = Edge::request([
-            'REQUEST_METHOD' => 'POST', 'QUERY_STRING' => 'a=admin.set_account&x[]=1', 'CONTENT_TYPE' => 'application/json',
-            'HTTP_X_WEBPULSE_REQUEST' => '1', 'REMOTE_ADDR' => '203.0.113.9', 'CONTENT_LENGTH' => '10',
-        ], '{"user":"a"}');
-        PkgSupport::assertSame('POST', $r->method);
-        PkgSupport::assertSame('admin.set_account', $r->get('a'));
-        PkgSupport::assertSame('1', $r->header('X-WebPulse-Request'));
-        PkgSupport::assertSame('{"user":"a"}', $r->body);
-        PkgSupport::assertSame('203.0.113.9', $r->remoteAddr);
-        $g = Edge::request(['REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=domains'], 'ignored');
-        PkgSupport::assertSame(null, $g->body, 'GET has no body');
+        PkgSupport::assertSame('{"theme":"dark"}', $recorded($call, 'stdin'), 'request body piped to the binary');
     },
 
-    'pkg_frontends: bootstrap locates the autoloader (WEBPULSE_HOME, then repo layout)' => static function () use ($repo): void {
-        // copy the bootstrap into a mini repository layout, minus the final "require" part
-        $tmp = PkgSupport::tmpDir('boot');
-        mkdir("$tmp/cpanel/webpulse/lib", 0777, true);
-        mkdir("$tmp/home/lib", 0777, true);
-        mkdir("$tmp/lib", 0777, true);
-        $src = (string) file_get_contents("$repo/cpanel/webpulse/lib/bootstrap.php");
-        $cut = strpos($src, '$webpulseAutoload = webpulse_find_autoload();');
-        PkgSupport::assertTrue($cut !== false, 'bootstrap structure');
-        file_put_contents("$tmp/cpanel/webpulse/lib/bootstrap.php", substr($src, 0, $cut));
-        $lookup = 'require $argv[1]; echo WEBPULSE_HOME, "|", webpulse_find_autoload();';
-        $boot = "$tmp/cpanel/webpulse/lib/bootstrap.php";
-
-        // nothing exists yet (unless the machine has a real installation)
-        [, $out] = PkgSupport::run([PHP_BINARY, '-r', $lookup, '--', $boot], ['WEBPULSE_HOME' => "$tmp/nowhere"]);
-        if (!is_file('/usr/local/webpulse/lib/autoload.php')) {
-            PkgSupport::assertSame("$tmp/nowhere|", $out, 'nothing found');
-        }
-        file_put_contents("$tmp/lib/autoload.php", "<?php\n");
-        [, $out] = PkgSupport::run([PHP_BINARY, '-r', $lookup, '--', $boot], ['WEBPULSE_HOME' => "$tmp/nowhere"]);
-        PkgSupport::assertTrue($out === "$tmp/nowhere|$tmp/lib/autoload.php" || $out === "$tmp/nowhere|/usr/local/webpulse/lib/autoload.php", "repo layout fallback: $out");
-        file_put_contents("$tmp/cpanel/webpulse/lib/autoload.php", "<?php\n");
-        [, $out] = PkgSupport::run([PHP_BINARY, '-r', $lookup, '--', $boot], ['WEBPULSE_HOME' => "$tmp/nowhere"]);
-        PkgSupport::assertTrue($out === "$tmp/nowhere|$tmp/cpanel/webpulse/lib/autoload.php" || $out === "$tmp/nowhere|/usr/local/webpulse/lib/autoload.php", "theme copy fallback: $out");
-        file_put_contents("$tmp/home/lib/autoload.php", "<?php\n");
-        [, $out] = PkgSupport::run([PHP_BINARY, '-r', $lookup, '--', $boot], ['WEBPULSE_HOME' => "$tmp/home/"]);
-        PkgSupport::assertSame("$tmp/home|$tmp/home/lib/autoload.php", $out, 'WEBPULSE_HOME wins and is normalised');
-
-        // the real bootstrap without any autoloader throws a RuntimeException (index.live.php catches it)
-        [, $out] = PkgSupport::run([PHP_BINARY, '-r', 'try { require $argv[1]; echo "loaded"; } catch (RuntimeException $e) { echo "threw"; }', '--', "$repo/cpanel/webpulse/lib/bootstrap.php"], ['WEBPULSE_HOME' => "$tmp/nowhere"]);
-        PkgSupport::assertTrue($out === 'loaded' || $out === 'threw', $out);
+    'pkg_frontends: api.live.php (CLI) falls back to STDIN for the body and forwards the environment' => static function () use ($stubBinary, $runLive, $recorded): void {
+        [$bin, $call] = $stubBinary("Content-Type: application/json\r\n\r\n{\"ok\":true}");
+        $env = ['WEBPULSE_BIN' => $bin, 'REQUEST_METHOD' => 'POST', 'QUERY_STRING' => 'a=x', 'CONTENT_TYPE' => 'application/json', 'CONTENT_LENGTH' => '16',
+            'HTTP_X_WEBPULSE_REQUEST' => '1', 'REMOTE_ADDR' => '203.0.113.9', 'REMOTE_USER' => 'mallory', 'STUB_CPANEL_USER' => 'alice'];
+        [$rc, $out] = $runLive('api.live.php', $env, '{"theme":"dark"}');
+        PkgSupport::assertSame(0, $rc, $out);
+        PkgSupport::assertSame('{"ok":true}', $out);
+        PkgSupport::assertSame('{"theme":"dark"}', $recorded($call, 'stdin'));
+        PkgSupport::assertContains("REMOTE_ADDR=203.0.113.9\n", $recorded($call, 'env'));
+        PkgSupport::assertContains("REMOTE_USER=alice\n", $recorded($call, 'env'));
     },
 
-    'pkg_frontends: api.live.php returns a JSON 500 without leaking paths when the engine cannot boot' => static function () use ($repo, $cpanelStub): void {
-        $prepend = $cpanelStub();
+    'pkg_frontends: api.live.php GET sends no body and a 4xx from the binary reaches the client' => static function () use ($stubBinary, $runLive, $recorded): void {
+        [$bin, $call] = $stubBinary("Status: 403 Forbidden\r\nContent-Type: application/json\r\n\r\n{\"ok\":false}");
+        [$rc, $out, $dump] = $runLive('api.live.php', ['WEBPULSE_BIN' => $bin, 'REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=domains']);
+        PkgSupport::assertSame(0, $rc, $out);
+        PkgSupport::assertSame('{"ok":false}', $out);
+        PkgSupport::assertSame(403, $dump['status'] ?? null);
+        PkgSupport::assertSame('', $recorded($call, 'stdin'), 'no body for GET');
+        PkgSupport::assertContains('QUERY_STRING=a=domains', $recorded($call, 'env'));
+    },
+
+    'pkg_frontends: api.live.php streams a large body unchanged' => static function () use ($stubBinary, $runLive): void {
+        $big = str_repeat('0123456789abcdef', 40000); // 640 KB
+        [$bin] = $stubBinary("Content-Type: text/csv\r\n\r\n" . $big);
+        [$rc, $out, $dump] = $runLive('api.live.php', ['WEBPULSE_BIN' => $bin, 'REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=export']);
+        PkgSupport::assertSame(0, $rc);
+        PkgSupport::assertSame(strlen($big), strlen($out), 'length');
+        PkgSupport::assertTrue($out === $big, 'content');
+        PkgSupport::assertSame(200, $dump['status'] ?? null, 'default status');
+    },
+
+    'pkg_frontends: api.live.php answers a generic JSON 500 when the binary is missing, broken or silent' => static function () use ($stubBinary, $runLive, $repo): void {
         $secret = PkgSupport::tmpDir('secret') . '/missing-config.json';
-        [$rc, $out] = PkgSupport::run([PHP_BINARY, '-d', "auto_prepend_file=$prepend", '-d', 'error_log=/dev/null', "$repo/cpanel/webpulse/api.live.php"], [
-            'WEBPULSE_HOME' => is_file("$repo/lib/autoload.php") ? $repo : '/nonexistent',
-            'WEBPULSE_CONFIG' => $secret, 'REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=domains', 'REMOTE_USER' => 'alice',
-        ]);
-        PkgSupport::assertSame(0, $rc, $out);
-        $json = json_decode($out, true);
-        PkgSupport::assertTrue(is_array($json), "JSON body expected, got: $out");
-        PkgSupport::assertSame(false, $json['ok'], 'ok=false');
-        PkgSupport::assertSame('internal_error', $json['error']['code']);
-        PkgSupport::assertNotContains('missing-config', $out, 'no path leak');
-        PkgSupport::assertNotContains($repo, $out, 'no path leak');
-    },
-
-    'pkg_frontends: api.live.php dispatches with the account from the cPanel session' => static function () use ($repo, $haveStack, $smokeRoot, $cpanelStub): void {
-        if (!$haveStack()) {
-            fwrite(STDERR, "SKIP engine/UI packages not complete yet\n");
-            return;
-        }
-        [$cfg] = $smokeRoot();
-        $prepend = $cpanelStub();
-        $env = ['WEBPULSE_HOME' => $repo, 'WEBPULSE_CONFIG' => $cfg, 'REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=domains',
-            'REMOTE_USER' => 'mallory', 'STUB_CPANEL_USER' => 'alice'];
-        [$rc, $out] = PkgSupport::run([PHP_BINARY, '-d', "auto_prepend_file=$prepend", "$repo/cpanel/webpulse/api.live.php"], $env);
-        PkgSupport::assertSame(0, $rc, $out);
-        $json = json_decode(substr($out, (int) strpos($out, '{')), true);
-        PkgSupport::assertTrue(is_array($json), "JSON expected, got: $out");
-        PkgSupport::assertSame(true, $json['ok'] ?? null, "ok expected: $out");
-        // a user can never ask for another account via parameters
-        $env['QUERY_STRING'] = 'a=domains&user=bob';
-        [$rc, $out] = PkgSupport::run([PHP_BINARY, '-d', "auto_prepend_file=$prepend", "$repo/cpanel/webpulse/api.live.php"], $env);
-        $json = json_decode(substr($out, (int) strpos($out, '{')), true);
-        foreach ($json['data']['domains'] ?? [] as $d) {
-            PkgSupport::assertSame('alice', $d['user'], 'only the session account is visible');
+        $cases = [
+            'missing binary' => ['/nonexistent/dir/webpulse'],
+            'crash without output' => [$stubBinary('', 1)[0]],
+            'garbage without header terminator' => [$stubBinary('this is not a cgi response', 0)[0]],
+        ];
+        foreach ($cases as $label => [$bin]) {
+            [$rc, $out, $dump] = $runLive('api.live.php', ['WEBPULSE_BIN' => $bin, 'WEBPULSE_CONFIG' => $secret, 'REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=domains']);
+            if ($label === 'missing binary' && is_executable('/usr/local/webpulse/bin/webpulse')) {
+                continue;
+            }
+            PkgSupport::assertSame(0, $rc, "$label: $out");
+            $json = json_decode($out, true);
+            PkgSupport::assertTrue(is_array($json), "$label: JSON body expected, got: $out");
+            PkgSupport::assertSame(false, $json['ok'], "$label: ok=false");
+            PkgSupport::assertSame('internal_error', $json['error']['code'], $label);
+            PkgSupport::assertSame(500, $dump['status'] ?? null, "$label: HTTP 500");
+            PkgSupport::assertNotContains('missing-config', $out, "$label: no path leak");
+            PkgSupport::assertNotContains($bin, $out, "$label: no path leak");
+            PkgSupport::assertNotContains($repo, $out, "$label: no path leak");
         }
     },
 
-    'pkg_frontends: index.live.php wraps the dashboard in the cPanel chrome' => static function () use ($repo, $haveStack, $smokeRoot, $cpanelStub): void {
-        if (!$haveStack()) {
-            fwrite(STDERR, "SKIP engine/UI packages not complete yet\n");
-            return;
-        }
-        [$cfg] = $smokeRoot();
-        $prepend = $cpanelStub();
+    'pkg_frontends: index.live.php wraps the embedded dashboard in the cPanel chrome' => static function () use ($stubBinary, $runLive, $recorded): void {
+        [$bin, $call] = $stubBinary("Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\n\r\n<div id=\"webpulse-app\" data-api=\"api.live.php\">dashboard</div>");
         $endLog = PkgSupport::tmpDir('end') . '/end.log';
-        [$rc, $out] = PkgSupport::run([PHP_BINARY, '-d', "auto_prepend_file=$prepend", '-d', 'error_log=/dev/null', "$repo/cpanel/webpulse/index.live.php"],
-            ['WEBPULSE_HOME' => $repo, 'WEBPULSE_CONFIG' => $cfg, 'REMOTE_USER' => 'alice', 'STUB_CPANEL_END' => $endLog]);
+        [$rc, $out, $dump] = $runLive('index.live.php', ['WEBPULSE_BIN' => $bin, 'REMOTE_USER' => 'mallory', 'STUB_CPANEL_USER' => 'alice', 'STUB_CPANEL_END' => $endLog]);
         PkgSupport::assertSame(0, $rc, $out);
-        PkgSupport::assertTrue(str_starts_with($out, '<!--HEADER:WebPulse Analytics-->'), 'starts with cPanel header');
-        PkgSupport::assertContains('webpulse-app', $out, 'dashboard fragment');
-        PkgSupport::assertContains('api.live.php', $out, 'api url in the bootstrap');
-        PkgSupport::assertTrue(str_ends_with($out, '<!--FOOTER-->'), 'ends with the footer');
+        PkgSupport::assertSame('<!--HEADER:WebPulse Analytics--><div id="webpulse-app" data-api="api.live.php">dashboard</div><!--FOOTER-->', $out, 'chrome + fragment, no CGI header text in the page');
+        PkgSupport::assertSame("cgi --principal user:alice --page --embedded --api-url api.live.php\n", $recorded($call, 'args'));
         PkgSupport::assertSame("end\n", (string) @file_get_contents($endLog), 'end() called once');
-
-        // a broken installation shows a friendly message, not a stack trace
-        [$rc, $out] = PkgSupport::run([PHP_BINARY, '-d', "auto_prepend_file=$prepend", '-d', 'error_log=/dev/null', "$repo/cpanel/webpulse/index.live.php"],
-            ['WEBPULSE_HOME' => $repo, 'WEBPULSE_CONFIG' => '/nonexistent/config.json', 'REMOTE_USER' => 'alice']);
-        PkgSupport::assertSame(0, $rc, $out);
-        PkgSupport::assertContains('not available right now', $out);
-        PkgSupport::assertNotContains('/nonexistent', $out, 'no path leak');
-        PkgSupport::assertNotContains('Stack trace', $out);
+        PkgSupport::assertNotContains('Content-Type: text/html', implode("\n", $dump['headers'] ?? []), 'headers of the binary are not applied after the chrome started');
     },
 
-    'pkg_frontends: api.cgi enforces identity and the mutation guard at the edge' => static function () use ($repo, $haveStack, $smokeRoot): void {
-        if (!$haveStack()) {
-            fwrite(STDERR, "SKIP engine/UI packages not complete yet\n");
-            return;
+    'pkg_frontends: index.live.php shows a friendly message, without paths, when the binary fails' => static function () use ($stubBinary, $runLive): void {
+        foreach (['/nonexistent/dir/webpulse', $stubBinary('', 1)[0]] as $bin) {
+            if ($bin === '/nonexistent/dir/webpulse' && is_executable('/usr/local/webpulse/bin/webpulse')) {
+                continue;
+            }
+            [$rc, $out] = $runLive('index.live.php', ['WEBPULSE_BIN' => $bin, 'WEBPULSE_CONFIG' => '/nonexistent/config.json']);
+            PkgSupport::assertSame(0, $rc, $out);
+            PkgSupport::assertTrue(str_starts_with($out, '<!--HEADER:WebPulse Analytics-->'), 'chrome header');
+            PkgSupport::assertContains('not available right now', $out);
+            PkgSupport::assertTrue(str_ends_with($out, '<!--FOOTER-->'), 'chrome footer');
+            PkgSupport::assertNotContains('/nonexistent', $out, 'no path leak');
+            PkgSupport::assertNotContains('Stack trace', $out);
         }
-        [$cfg] = $smokeRoot();
-        $base = ['WEBPULSE_HOME' => $repo, 'WEBPULSE_CONFIG' => $cfg];
-        $run = static function (array $env, ?string $stdin = null) use ($repo, $base): array {
-            [$rc, $out] = PkgSupport::run([PHP_BINARY, "$repo/whm/cgi/api.cgi"], $env + $base, $stdin);
-            [$head, $body] = array_pad(explode("\r\n\r\n", $out, 2), 2, '');
-            return [$rc, $head, $body];
-        };
-
-        [, $head, $body] = $run(['REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=admin.overview']);
-        PkgSupport::assertContains('Status: 403', $head, 'no REMOTE_USER');
-        PkgSupport::assertSame(false, json_decode($body, true)['ok'] ?? null);
-
-        [, $head] = $run(['REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=admin.overview', 'REMOTE_USER' => 'alice']);
-        PkgSupport::assertContains('Status: 403', $head, 'a plain account is not a reseller');
-
-        foreach (['GET' => null, 'POST' => null] as $method => $_) {
-            [, $head, $body] = $run(['REQUEST_METHOD' => $method, 'QUERY_STRING' => 'a=admin.set_account', 'REMOTE_USER' => 'root', 'CONTENT_LENGTH' => '2'], '{}');
-            PkgSupport::assertContains('Status: 405', $head, "$method without X-WebPulse-Request");
-        }
-
-        [, $head, $body] = $run(['REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=admin.overview', 'REMOTE_USER' => 'root']);
-        PkgSupport::assertContains('Content-Type: application/json', $head, 'root reaches the API');
-        PkgSupport::assertTrue(is_array(json_decode($body, true)), "JSON body expected: $body");
-
-        [, $head] = $run(['REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=admin.overview', 'REMOTE_USER' => 'reseller1']);
-        PkgSupport::assertNotContains('Status: 403', $head, 'reseller1 owns alice');
     },
 
-    'pkg_frontends: index.cgi serves the dashboard to root and refuses strangers' => static function () use ($repo, $haveStack, $smokeRoot): void {
-        if (!$haveStack()) {
-            fwrite(STDERR, "SKIP engine/UI packages not complete yet\n");
-            return;
+    'pkg_frontends: the shims find a binary next to them (bin/webpulse)' => static function () use ($repo, $stubBinary, $recorded): void {
+        if (is_executable('/usr/local/webpulse/bin/webpulse')) {
+            PkgSupport::skip('a real installation exists on this machine');
         }
-        [$cfg] = $smokeRoot();
-        $env = ['WEBPULSE_HOME' => $repo, 'WEBPULSE_CONFIG' => $cfg];
-        [$rc, $out] = PkgSupport::run([PHP_BINARY, "$repo/whm/cgi/index.cgi"], $env + ['REMOTE_USER' => 'root']);
+        $dir = PkgSupport::tmpDir('nextto');
+        PkgSupport::run(['cp', '-a', "$repo/cpanel/webpulse/.", $dir]);
+        [$stub, $call] = $stubBinary("Content-Type: application/json\r\n\r\n{\"ok\":true}");
+        mkdir("$dir/bin");
+        copy($stub, "$dir/bin/webpulse");
+        chmod("$dir/bin/webpulse", 0755);
+        // the stub logs next to itself: point it at the original location
+        file_put_contents("$dir/bin/webpulse", str_replace("log='" . dirname($stub) . "/call'", "log='$call'", (string) file_get_contents($stub)));
+        $prepend = PkgSupport::tmpDir('prep') . '/prepend.php';
+        file_put_contents($prepend, "<?php class CPANEL { public function uapi(\$m,\$f,\$a=[]) { return ['data'=>['user'=>'alice']]; } public function end() {} }\n");
+        [$rc, $out] = PkgSupport::run([PHP_BINARY, '-d', "auto_prepend_file=$prepend", "$dir/api.live.php"], ['REQUEST_METHOD' => 'GET', 'QUERY_STRING' => 'a=domains']);
         PkgSupport::assertSame(0, $rc, $out);
-        PkgSupport::assertTrue(str_starts_with($out, "Content-Type: text/html; charset=utf-8\r\n"), 'CGI header first');
-        PkgSupport::assertContains("\r\n\r\n<!doctype html", $out, 'full document');
-        PkgSupport::assertContains('api.cgi', $out, 'api url');
-        PkgSupport::assertNotContains('#WHMADDON', $out, 'marker comments are not printed');
+        PkgSupport::assertSame('{"ok":true}', $out);
+        PkgSupport::assertSame("cgi --principal user:alice --api\n", $recorded($call, 'args'));
+    },
 
-        [, $out] = PkgSupport::run([PHP_BINARY, "$repo/whm/cgi/index.cgi"], $env);
-        PkgSupport::assertContains('Status: 403', $out, 'anonymous');
-        PkgSupport::assertNotContains('<script', $out, 'no dashboard for strangers');
+    'pkg_frontends: WHM index.cgi and api.cgi exec the binary with the documented arguments' => static function () use ($repo, $stubBinary, $recorded): void {
+        $cases = [
+            'index.cgi' => ["cgi --whm --page --api-url api.cgi\n", "Content-Type: text/html; charset=utf-8\r\n\r\n<!doctype html><html></html>"],
+            'api.cgi' => ["cgi --whm --api\n", "Status: 405 Method Not Allowed\r\nContent-Type: application/json\r\n\r\n{\"ok\":false}"],
+        ];
+        foreach ($cases as $cgi => [$expectedArgs, $response]) {
+            [$bin, $call] = $stubBinary($response);
+            [$rc, $out] = PkgSupport::run(['bash', "$repo/whm/cgi/$cgi"], [
+                'WEBPULSE_BIN' => $bin, 'REMOTE_USER' => 'reseller1', 'REQUEST_METHOD' => 'POST', 'QUERY_STRING' => 'a=admin.run',
+                'CONTENT_TYPE' => 'application/json', 'CONTENT_LENGTH' => '2', 'HTTP_X_WEBPULSE_REQUEST' => '1', 'REMOTE_ADDR' => '198.51.100.7',
+                'WEBPULSE_CONFIG' => '/some/config.json',
+            ], '{}');
+            PkgSupport::assertSame(0, $rc, "$cgi: $out");
+            PkgSupport::assertSame($expectedArgs, $recorded($call, 'args'), "$cgi arguments");
+            PkgSupport::assertSame($response, $out, "$cgi stdout is exactly what the binary printed");
+            $seen = $recorded($call, 'env');
+            foreach (['REMOTE_USER=reseller1', 'REQUEST_METHOD=POST', 'QUERY_STRING=a=admin.run', 'HTTP_X_WEBPULSE_REQUEST=1', 'REMOTE_ADDR=198.51.100.7', 'WEBPULSE_CONFIG=/some/config.json'] as $line) {
+                PkgSupport::assertContains($line . "\n", $seen, "$cgi forwards $line");
+            }
+            PkgSupport::assertSame('{}', $recorded($call, 'stdin'), "$cgi: the request body reaches the binary");
+        }
+    },
+
+    'pkg_frontends: WHM CGIs print a generic error when the binary is missing' => static function () use ($repo): void {
+        if (is_executable('/usr/local/webpulse/bin/webpulse')) {
+            PkgSupport::skip('a real installation exists on this machine');
+        }
+        $dir = PkgSupport::tmpDir('whmmissing');
+        foreach (['index.cgi', 'api.cgi'] as $cgi) {
+            copy("$repo/whm/cgi/$cgi", "$dir/$cgi");
+            chmod("$dir/$cgi", 0755);
+            [$rc, $out] = PkgSupport::run(['bash', "$dir/$cgi"], ['WEBPULSE_BIN' => "$dir/nonexistent/webpulse", 'REMOTE_USER' => 'root']);
+            PkgSupport::assertSame(0, $rc, $out);
+            PkgSupport::assertTrue(str_starts_with($out, "Status: 500 Internal Server Error\r\n"), "$cgi status");
+            PkgSupport::assertNotContains($dir, $out, "$cgi: no path leak");
+            PkgSupport::assertNotContains('nonexistent', $out, "$cgi: no path leak");
+        }
+        [, $out] = PkgSupport::run(['bash', "$dir/api.cgi"], ['REMOTE_USER' => 'root']);
+        PkgSupport::assertSame(false, json_decode(substr($out, (int) strpos($out, '{')), true)['ok'] ?? null, 'api.cgi error is JSON');
+    },
+
+    'pkg_frontends: WHM CGIs also find bin/webpulse next to the script' => static function () use ($repo, $stubBinary, $recorded): void {
+        if (is_executable('/usr/local/webpulse/bin/webpulse')) {
+            PkgSupport::skip('a real installation exists on this machine');
+        }
+        $dir = PkgSupport::tmpDir('whmnear');
+        mkdir("$dir/bin");
+        [$stub, $call] = $stubBinary("Content-Type: text/plain\r\n\r\nnear");
+        file_put_contents("$dir/bin/webpulse", str_replace("log='" . dirname($stub) . "/call'", "log='$call'", (string) file_get_contents($stub)));
+        chmod("$dir/bin/webpulse", 0755);
+        copy("$repo/whm/cgi/index.cgi", "$dir/index.cgi");
+        chmod("$dir/index.cgi", 0755);
+        [$rc, $out] = PkgSupport::run(["$dir/index.cgi"], ['REMOTE_USER' => 'root']);
+        PkgSupport::assertSame(0, $rc, $out);
+        PkgSupport::assertContains('near', $out);
+        PkgSupport::assertSame("cgi --whm --page --api-url api.cgi\n", $recorded($call, 'args'));
     },
 ];

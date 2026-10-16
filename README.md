@@ -4,13 +4,13 @@
 
 WebPulse reads the access logs that Apache or Nginx already write for every domain on a cPanel
 server and turns them into a modern, privacy-friendly dashboard. There is no JavaScript tracker
-on your customers' sites, no cookie, no external service and no dependency beyond the PHP and
-SQLite that ship with cPanel. Account owners get a *WebPulse Analytics* icon in cPanel; the server
+on your customers' sites, no cookie, no external service and nothing to install beyond one static
+binary (SQLite is built in). Account owners get a *WebPulse Analytics* icon in cPanel; the server
 administrator gets a WHM plugin to switch collection on and off per account or domain.
 
 [![CI](https://github.com/inalto/webpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/inalto/webpulse/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![PHP >= 8.1](https://img.shields.io/badge/PHP-%E2%89%A5%208.1-777bb4.svg)](https://www.php.net/)
+[![Rust](https://img.shields.io/badge/built%20with-Rust-dea584.svg)](https://www.rust-lang.org/)
 
 ![WebPulse overview](docs/screenshots/overview-1280-light.png)
 
@@ -29,15 +29,17 @@ administrator gets a WHM plugin to switch collection on and off per account or d
   acquisition channels, search engines, campaigns (UTM), countries, devices, browsers, entry and exit
   pages with bounce rate, 404s with their referrers, 5xx errors, bandwidth by file type, downloads,
   crawler share (AI crawlers highlighted) and a visits log.
-- **Small.** About 30 000 log lines per second and 26 MiB peak memory on the development machine
-  (see [How it works](#how-it-works)).
+- **Small and fast.** One static binary of a few megabytes, no interpreter, no `memory_limit` or
+  `max_execution_time` surprises. The 0.1.0 PHP engine read about 30 000 log lines per second in
+  26 MiB; the Rust rewrite exists to do that several times faster (see [How it works](#how-it-works)).
 - **Light and dark theme**, works on a phone.
 
 ![WHM server view](docs/screenshots/server-1280-dark.png)
 
-> **Status.** WebPulse 0.1.0 has not been released yet, and it was developed **without access to a
-> real cPanel server**. The engine, the API and the dashboard are covered by an automated test suite
-> that runs against a fake server root. The cPanel-specific steps (`install_plugin`,
+> **Status.** WebPulse 0.2.0 is a rewrite of the 0.1.0 PHP code in Rust (same data, same dashboard;
+> see [docs/RUST-PORT.md](docs/RUST-PORT.md)), and it was developed **without access to a real
+> cPanel server**. The engine, the API and the dashboard are covered by an automated test suite
+> that runs against a fake server root, and a parity harness compares its results with the 0.1.0 engine. The cPanel-specific steps (`install_plugin`,
 > `register_appconfig`, `manage_hooks`, the Jupiter icon) follow the cPanel developer documentation
 > but still need to be verified on a real server. Try it on a test server first and
 > [report what you find](https://github.com/inalto/webpulse/issues).
@@ -49,12 +51,16 @@ administrator gets a WHM plugin to switch collection on and off per account or d
 - A server running **cPanel & WHM** with the **Jupiter** theme and Apache (EasyApache 4) or ea-nginx.
   The documentation targets cPanel 110 or later on AlmaLinux, Rocky Linux, CloudLinux or Ubuntu.
   The installer does not check the cPanel version.
-- **Root** access.
-- **PHP 8.1 or later with `pdo_sqlite`.** cPanel's own `/usr/local/cpanel/3rdparty/bin/php`
-  qualifies. The installer tries it first, then `php` from `PATH`.
+- **Root** access, on **Linux x86_64 or aarch64**.
+- **No PHP, no Rust, no SQLite to install.** WebPulse is one statically linked binary
+  (`/usr/local/webpulse/bin/webpulse`) that contains the collector, the CLI, the JSON API, the
+  dashboard and the CGI entry points. The only PHP involved is cPanel's own
+  (`/usr/local/cpanel/3rdparty/bin/php`), which runs the two tiny LiveAPI shims that every cPanel
+  plugin page needs; the WHM side and the command line do not use PHP at all.
 - Per-domain access logs in the **combined** format (the cPanel default).
-- `curl` or `wget`, `tar`, and the usual core tools. Outbound HTTPS to `github.com` and
-  `codeload.github.com` (and to `download.db-ip.com` if you want GeoIP).
+- `curl` or `wget`, `tar`, `sha256sum` and the usual core tools. Outbound HTTPS to `github.com` (and
+  to `download.db-ip.com` if you want GeoIP).
+- Only for `--build`: the Rust toolchain (`cargo`, see [rustup.rs](https://rustup.rs)).
 
 ### One-line install
 
@@ -78,16 +84,26 @@ less install.sh
 bash install.sh --geoip
 ```
 
-From a git checkout or an unpacked release, `bash install.sh` installs the code it sits next to.
+The installer downloads the **release for your CPU** (`webpulse-<version>-x86_64-unknown-linux-musl.tar.gz`
+or `...-aarch64-unknown-linux-musl.tar.gz`) from GitHub and verifies its sha256 checksum before it
+touches anything. From an unpacked release tarball, `bash install.sh` installs the files it sits next to.
 When stdin is not a terminal (as with `curl | bash`) the installer does not ask for confirmation.
+
+**Air-gapped server, or your own build?** Download `webpulse-<version>-<arch>-linux-musl.tar.gz` and its
+`.sha256` on another machine, copy the tarball over, unpack it and run `./install.sh`; or install any
+binary you built with `./install.sh --binary /path/to/webpulse`. **No release for your platform, or you
+want to build it yourself?** `install.sh --build` downloads the source and runs `cargo build --release`
+(needs `cargo`).
 
 ### Installer options
 
 | Flag | Meaning |
 |------|---------|
 | `--geoip` | Enable GeoIP and download the free DB-IP country database. A failed download is only a warning; retry with `webpulse geoip-update`. |
-| `--ref <branch\|tag>` | Install this git ref. Default `main` (env `WEBPULSE_REF`). |
+| `--ref <tag>` | Install this release (`v0.2.0` or `0.2.0`). Default `main`, which means *the latest release* (env `WEBPULSE_REF`). A branch name builds from source and needs `cargo`. |
 | `--repo <owner/name>` | Install from this GitHub repository, for example a fork. Default `inalto/webpulse` (env `WEBPULSE_REPO`). |
+| `--build` | Do not download a binary: fetch the source of `--ref` and run `cargo build --release --locked`. Fails with a clear message when `cargo` is missing. Also the automatic fallback when a release has no binary for your architecture and `cargo` is installed. |
+| `--binary <file>` | Install this WebPulse binary instead of the release's (air-gapped installs, custom builds). |
 | `--no-cron` | Do not install `/etc/cron.d/webpulse`. You must then schedule `webpulse collect` yourself. |
 | `--update` | Update an existing installation in place. Safe to repeat. |
 | `--uninstall` | Remove plugins, hooks, cron and code. Keeps `/var/webpulse` and `/etc/webpulse`. |
@@ -100,18 +116,20 @@ When stdin is not a terminal (as with `curl | bash`) the installer does not ask 
 
 ### What the installer does
 
-1. Checks that it runs as root, that `/usr/local/cpanel/cpanel` exists (unless `--standalone`) and that
-   a suitable PHP is available.
-2. Downloads `https://codeload.github.com/<repo>/tar.gz/<ref>` (or uses the checkout it sits in) and
-   refuses an archive that does not contain `bin/webpulse`.
-3. Copies the release to `/usr/local/webpulse-releases/<version>/`, sets the PHP in the shebang of
-   `bin/webpulse` and runs `webpulse setup`. That creates `/etc/webpulse/config.json`, `/var/webpulse/`
-   and the registry database.
+1. Checks that it runs as root and that `/usr/local/cpanel/cpanel` exists (unless `--standalone`).
+2. Gets the release: detects `uname -m` (`x86_64` or `aarch64`), resolves the latest release (or the
+   `--ref` tag) through the GitHub API, downloads `webpulse-<version>-<target>.tar.gz` and its
+   `.sha256`, **verifies the checksum** and unpacks it. Without a binary for that ref/architecture it
+   builds from source when `cargo` is present (`--build` forces this) and otherwise stops with
+   instructions. `--binary <file>` skips the binary download.
+3. Copies the release to `/usr/local/webpulse-releases/<version>/` (`bin/webpulse` mode 0755), checks
+   that the binary runs on this machine and runs `webpulse setup`. That creates
+   `/etc/webpulse/config.json`, `/var/webpulse/` and the registry database.
 4. Points `/usr/local/webpulse` at the new release with an atomic symlink swap. The last three releases
    are kept.
-5. Copies the cPanel plugin into `/usr/local/cpanel/base/frontend/jupiter/webpulse/` and registers it
-   with `install_plugin` (Metrics group, feature `webpulse`).
-6. Copies the WHM CGI scripts and icon and registers them with `register_appconfig`. It restarts
+5. Copies the two LiveAPI shims into `/usr/local/cpanel/base/frontend/jupiter/webpulse/` and registers
+   the plugin with `install_plugin` (Metrics group, feature `webpulse`).
+6. Copies the WHM CGI shims and icon and registers them with `register_appconfig`. It restarts
    `cpsrvd` only if the registration asks for it.
 7. Registers two Standardized Hooks with `manage_hooks` (`Stats::RunAll` and `Stats::RunUser`, stage
    `pre`) and creates `/var/webpulse/run/hook` (mode 1777).
@@ -119,17 +137,18 @@ When stdin is not a terminal (as with `curl | bash`) the installer does not ask 
    background and prints the URLs.
 
 If a registration step fails, the installer prints the exact command and its output, undoes what
-this run did (an update goes back to the previous release) and exits.
+this run did (an update goes back to the previous release) and exits. A checksum mismatch stops
+the installer before anything is changed.
 
 Where things end up:
 
 | What | Path |
 |------|------|
-| Code | `/usr/local/webpulse` (symlink to `/usr/local/webpulse-releases/<version>`) |
+| Code | `/usr/local/webpulse` (symlink to `/usr/local/webpulse-releases/<version>`); the program is `bin/webpulse` |
 | Configuration | `/etc/webpulse/config.json` (mode 0600) |
 | Statistics | `/var/webpulse/` (`webpulse.db`, `data/<user>/<domain>.db`, `geoip/`, `log/`, `run/`) |
-| cPanel plugin | `/usr/local/cpanel/base/frontend/jupiter/webpulse/` |
-| WHM plugin | `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/`, `.../addon_plugins/webpulse.png`, `/var/cpanel/apps/webpulse.conf` |
+| cPanel plugin | `/usr/local/cpanel/base/frontend/jupiter/webpulse/` (PHP shims only) |
+| WHM plugin | `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/` (bash shims), `.../addon_plugins/webpulse.png`, `/var/cpanel/apps/webpulse.conf` |
 | Cron | `/etc/cron.d/webpulse` |
 
 ### First steps after installing
@@ -255,7 +274,7 @@ in the registry and win over the file.
 | `geoip.enabled` | `false` | Look up the country of each visit. *Editable.* |
 | `geoip.country_db` | `/var/webpulse/geoip/dbip-country-lite.mmdb` | Country database (`.mmdb`). |
 | `geoip.city_db` | `null` | Optional city database (`.mmdb`). |
-| `php_bin` | `null` | PHP binary for the CLI and for jobs started from WHM, if it differs from the running one. |
+| `php_bin` | `null` | Obsolete since 0.2.0 (the program no longer uses PHP). Ignored; kept so old configuration files stay valid. |
 | `paths.data_dir` | `/var/webpulse/data` | Per-domain databases. |
 | `paths.registry_db` | `/var/webpulse/webpulse.db` | Registry database. |
 | `paths.log_dir` | `/var/webpulse/log` | `webpulse.log`. |
@@ -290,10 +309,18 @@ Every five minutes, and again right before cPanel's own `cpanellogd` statistics 
 its last checkpoint. It parses the *combined* log lines, classifies each hit (pageview, static file,
 download, redirect, error, bot), groups human hits into visits with a 30-minute timeout, and updates
 the daily aggregates plus a short-lived visits log in the domain's SQLite database. The dashboards only
-read those databases. A nightly rollup applies retention. Measured on the development machine:
-about 30 000 lines per second, 26 MiB peak memory. Details:
+read those databases. A nightly rollup applies retention. Details:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the wiki page
 [How It Works](https://github.com/inalto/webpulse/wiki/How-It-Works).
+
+**Architecture in one paragraph.** Everything is the single Rust binary `webpulse`: the collector and
+rollup (cron), the CLI, the JSON API, the page renderer, a local dev server and the `webpulse cgi`
+entry point. The dashboard JavaScript and CSS (`ui/`) are embedded in it. cPanel requires
+`*.live.php` pages to be PHP (or Perl) to use its `CPANEL` class, so `index.live.php` and `api.live.php`
+are thin shims: they resolve the account from the cPanel session and run
+`webpulse cgi --principal user:<account>` as that account, forwarding the CGI variables and the
+request body. The WHM `index.cgi` and `api.cgi` are bash shims that `exec webpulse cgi --whm`.
+The two hooks are shell scripts.
 
 ## Documentation
 
@@ -307,26 +334,31 @@ Wiki: <https://github.com/inalto/webpulse/wiki>
 | [docs/API.md](docs/API.md) | JSON API used by the dashboards |
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | Every report and graph, and why it is there |
 | [docs/CPANEL-INTEGRATION.md](docs/CPANEL-INTEGRATION.md) | Plugin registration, hooks, log locations |
-| [docs/INSTALL.md](docs/INSTALL.md) | Installation, manual installation, update, uninstall, troubleshooting |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Running the tests and the dev dashboard without cPanel |
+| [docs/INSTALL.md](docs/INSTALL.md) | Installation, manual installation, building from source, release layout, update, uninstall, troubleshooting |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Cargo workflow, make targets, tests, parity harness, releases |
+| [docs/RUST-PORT.md](docs/RUST-PORT.md) | The 0.2.0 rewrite in Rust: layout, compatibility contract, `webpulse cgi` |
 | [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) | Work packages and contracts of the first implementation |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes |
 
 ## Contributing and development
 
-Nothing here needs cPanel.
+Nothing here needs cPanel. You need a Rust toolchain (stable); PHP is only used to run the packaging
+tests and the parity harness.
 
 ```bash
-make test           # php -l on every file, then the unit and integration tests
+make build          # cargo build --release  ->  target/release/webpulse
+make test           # cargo test, the packaging tests (php tests/run.php pkg_) and the parity harness
+make lint           # cargo fmt --check, clippy -D warnings, shellcheck
 make serve          # collect sample logs and serve the dashboard on 127.0.0.1:8099 as account "alice"
 make serve-admin    # same, with the WHM administrator view
-make dist           # build dist/webpulse-<version>.tar.gz
+make dist           # source tarball dist/webpulse-<version>.tar.gz
+make release        # binary tarball dist/webpulse-<version>-<target>.tar.gz (+ .sha256)
 ```
 
 `make serve` prints the URL to open; it contains a random token the dev server requires.
-Read [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) first. The rules in short: PHP 8.1 or later,
-`declare(strict_types=1)`, no external PHP or JavaScript dependencies, every UI string goes through
-`t()`. CI runs the tests on PHP 8.1 and 8.3 and runs shellcheck on the shell scripts.
+Read [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) first. CI runs `cargo fmt --check`,
+`cargo clippy -D warnings`, `cargo test --release`, the packaging tests, the parity harness and
+shellcheck; pushing a `v*` tag builds the static x86_64 and aarch64 binaries and publishes the release.
 
 ## License
 

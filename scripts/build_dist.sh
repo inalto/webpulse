@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Build dist/webpulse-<VERSION>.tar.gz from a clean `git archive` of HEAD.
+# Build dist/webpulse-<VERSION>.tar.gz (the SOURCE tarball) from a clean `git archive` of HEAD.
+# It is what `install.sh --build` compiles with cargo; the prebuilt binary tarball
+# (webpulse-<VERSION>-<target>.tar.gz) comes from scripts/build_release.sh.
 #
 #   scripts/build_dist.sh [output-dir]        (default: dist/)
 #
@@ -32,9 +34,9 @@ fi
 
 git archive --format=tar --prefix="webpulse-$version/" "$ref" | gzip -9n >"$out"
 
-# sanity: the installer needs these
+# sanity: the installer needs these (a real checkout also has Cargo.toml and src/)
 listing=$(tar -tzf "$out")
-for required in "webpulse-$version/bin/webpulse" "webpulse-$version/installer/lib.sh" "webpulse-$version/VERSION"; do
+for required in "webpulse-$version/install.sh" "webpulse-$version/installer/lib.sh" "webpulse-$version/VERSION"; do
     if ! printf '%s\n' "$listing" | grep -qxF "$required"; then
         echo "build_dist: $required is missing from the archive (commit it first)" >&2
         rm -f "$out"

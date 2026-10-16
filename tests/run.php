@@ -3,14 +3,16 @@
 declare(strict_types=1);
 
 /*
- * Dependency-free test runner.
+ * Minimal test runner for the packaging tests (installer, shims, hooks, static
+ * checks). The engine and the web layer are tested by `cargo test`; PHP is only
+ * used here because the packaging has PHP shims and the cPanel box has PHP.
  *
- *   php tests/run.php [filter…]
+ *   php tests/run.php [filter...]
  *
- * Every tests/cases/*.php returns an array of name => callable. A test fails
- * when it throws; WebPulse\Tests\Skip marks it skipped. Output is TAP-like;
- * the exit code is 1 when a test failed. A filter matches the case file name
- * (e.g. "engine_") or "file:test name" substrings.
+ * Every tests/cases/pkg_*.php returns an array of name => callable. A test fails
+ * when it throws; PkgSkip marks it skipped. Output is TAP-like; the exit code is
+ * 1 when a test failed. A filter matches the case file name (e.g. "pkg_hooks") or
+ * a substring of "file: test name".
  */
 
 error_reporting(E_ALL);
@@ -24,25 +26,21 @@ set_error_handler(static function (int $no, string $msg, string $file, int $line
 });
 
 $root = dirname(__DIR__);
-require $root . '/lib/autoload.php';
-spl_autoload_register(static function (string $class) use ($root): void {
-    if (str_starts_with($class, 'WebPulse\\Tests\\')) {
-        $f = $root . '/tests/support/' . str_replace('\\', '/', substr($class, 15)) . '.php';
-        if (is_file($f)) {
-            require $f;
-        }
-    }
-});
+require_once $root . '/tests/cases/pkg_support.php'; // PkgSupport, PkgSkip
 @mkdir($root . '/tests/tmp', 0755, true);
 
 $filters = array_slice($argv, 1);
-$files = glob($root . '/tests/cases/*.php') ?: [];
+$files = glob($root . '/tests/cases/pkg_*.php') ?: [];
 sort($files);
 $n = $pass = $fail = $skip = 0;
 $failures = [];
 $t0 = microtime(true);
 foreach ($files as $file) {
     $base = basename($file, '.php');
+    if ($base === 'pkg_support') {
+        require_once $file;
+        continue;
+    }
     $tests = require $file;
     if (!is_array($tests)) {
         echo "not ok - $base: case file must return an array\n";
@@ -50,7 +48,7 @@ foreach ($files as $file) {
         continue;
     }
     foreach ($tests as $name => $fn) {
-        $id = "$base: $name";
+        $id = str_starts_with($name, $base) ? $name : "$base: $name";
         if ($filters !== []) {
             $hit = false;
             foreach ($filters as $f) {
@@ -64,12 +62,11 @@ foreach ($files as $file) {
         }
         $n++;
         $t = microtime(true);
-        $saveEnv = getenv('WEBPULSE_NOW');
         try {
             $fn();
             $pass++;
             printf("ok %d - %s (%d ms)\n", $n, $id, (microtime(true) - $t) * 1000);
-        } catch (WebPulse\Tests\Skip $e) {
+        } catch (PkgSkip $e) {
             $skip++;
             printf("ok %d - %s # SKIP %s\n", $n, $id, $e->getMessage());
         } catch (Throwable $e) {
@@ -79,18 +76,15 @@ foreach ($files as $file) {
             $where = $e->getFile() . ':' . $e->getLine();
             foreach ($e->getTrace() as $fr) {
                 if (isset($fr['file']) && str_contains($fr['file'], '/tests/cases/')) {
-                    $where = $fr['file'] . ':' . $fr['line'];
+                    $where = $fr['file'] . ':' . ($fr['line'] ?? 0);
                     break;
                 }
             }
             echo '  # ' . get_class($e) . ': ' . str_replace("\n", "\n  # ", $e->getMessage()) . "\n  # at $where\n";
-        } finally {
-            putenv($saveEnv === false ? 'WEBPULSE_NOW' : 'WEBPULSE_NOW=' . $saveEnv);
         }
     }
 }
-printf("1..%d\n# tests %d, passed %d, failed %d, skipped %d, time %.1fs, peak memory %.1f MiB\n",
-    $n, $n, $pass, $fail, $skip, microtime(true) - $t0, memory_get_peak_usage(true) / 1048576);
+printf("1..%d\n# tests %d, passed %d, failed %d, skipped %d, time %.1fs\n", $n, $n, $pass, $fail, $skip, microtime(true) - $t0);
 foreach ($failures as $f) {
     echo "# FAILED: $f\n";
 }

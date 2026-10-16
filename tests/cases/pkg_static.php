@@ -3,8 +3,9 @@
 declare(strict_types=1);
 
 /*
- * WP3 static checks: syntax of every shell/PHP/Python packaging file, plugin
- * descriptors against docs/CPANEL-INTEGRATION.md, icons, cron file.
+ * Static checks: syntax of every shell/PHP/Python packaging file, plugin
+ * descriptors against docs/CPANEL-INTEGRATION.md, icons, cron file, Makefile
+ * targets, CI and release workflows.
  */
 
 require_once __DIR__ . '/pkg_support.php';
@@ -12,9 +13,10 @@ require_once __DIR__ . '/pkg_support.php';
 $repo = PkgSupport::repo();
 
 $shellScripts = ['install.sh', 'uninstall.sh', 'installer/lib.sh', 'hooks/stats_runall_pre.sh',
-    'hooks/stats_runuser_pre.sh', 'scripts/build_dist.sh'];
+    'hooks/stats_runuser_pre.sh', 'scripts/build_dist.sh', 'scripts/build_release.sh', 'scripts/devenv.sh',
+    'scripts/geoip_fixture.sh', 'scripts/publish_wiki.sh', 'whm/cgi/index.cgi', 'whm/cgi/api.cgi'];
 $phpFiles = ['cpanel/webpulse/index.live.php', 'cpanel/webpulse/api.live.php', 'cpanel/webpulse/lib/LiveApiUser.php',
-    'cpanel/webpulse/lib/bootstrap.php', 'whm/cgi/index.cgi', 'whm/cgi/api.cgi', 'whm/lib/Edge.php'];
+    'cpanel/webpulse/lib/CgiBridge.php'];
 
 return [
     'pkg_static: bash -n on every shell script' => static function () use ($repo, $shellScripts): void {
@@ -25,10 +27,8 @@ return [
     },
 
     'pkg_static: shellcheck (warning level) when available' => static function () use ($repo, $shellScripts): void {
-        [$rc] = PkgSupport::run(['sh', '-c', 'command -v shellcheck']);
-        if ($rc !== 0) {
-            fwrite(STDERR, "SKIP shellcheck not installed\n");
-            return;
+        if (!PkgSupport::have('shellcheck')) {
+            PkgSupport::skip('shellcheck not installed');
         }
         foreach ($shellScripts as $f) {
             [$rc, $out] = PkgSupport::run(['shellcheck', '-S', 'warning', "$repo/$f"]);
@@ -37,26 +37,47 @@ return [
     },
 
     'pkg_static: scripts are executable and have a shebang' => static function () use ($repo, $shellScripts): void {
-        foreach (array_merge(array_diff($shellScripts, ['installer/lib.sh']), ['scripts/make_icons.py', 'whm/cgi/index.cgi', 'whm/cgi/api.cgi']) as $f) {
+        foreach (array_merge(array_diff($shellScripts, ['installer/lib.sh']), ['scripts/make_icons.py']) as $f) {
             PkgSupport::assertTrue(is_executable("$repo/$f"), "$f must be executable");
             PkgSupport::assertSame('#!', substr((string) file_get_contents("$repo/$f"), 0, 2), "$f shebang");
         }
     },
 
-    'pkg_static: php -l on live.php, lib and CGI front-ends' => static function () use ($repo, $phpFiles): void {
+    'pkg_static: php -l on the cPanel shims and their library' => static function () use ($repo, $phpFiles): void {
         foreach ($phpFiles as $f) {
             [$rc, $out] = PkgSupport::run([PHP_BINARY, '-l', "$repo/$f"]);
             PkgSupport::assertSame(0, $rc, "php -l $f\n$out");
         }
     },
 
-    'pkg_static: CGI files start with the cPanel shebang and WHM markers' => static function () use ($repo): void {
-        foreach (['index.cgi', 'api.cgi'] as $f) {
-            $lines = explode("\n", (string) file_get_contents("$repo/whm/cgi/$f"));
-            PkgSupport::assertSame('#!/usr/local/cpanel/3rdparty/bin/php', $lines[0], "$f shebang");
-            PkgSupport::assertSame('<?php', $lines[1], "$f opening tag");
-            PkgSupport::assertSame('#WHMADDON:webpulse:WebPulse Analytics:webpulse.png', $lines[2], "$f WHMADDON");
-            PkgSupport::assertSame('#ACLS:all', $lines[3], "$f ACLS");
+    'pkg_static: WHM CGIs are bash shims that keep the WHM markers and exec the binary' => static function () use ($repo): void {
+        $expectedExec = ['index.cgi' => 'exec "$bin" cgi --whm --page --api-url api.cgi', 'api.cgi' => 'exec "$bin" cgi --whm --api'];
+        foreach ($expectedExec as $f => $exec) {
+            $src = (string) file_get_contents("$repo/whm/cgi/$f");
+            $lines = explode("\n", $src);
+            PkgSupport::assertSame('#!/bin/bash', $lines[0], "$f shebang");
+            PkgSupport::assertSame('#WHMADDON:webpulse:WebPulse Analytics:webpulse.png', $lines[1], "$f WHMADDON");
+            PkgSupport::assertSame('#ACLS:all', $lines[2], "$f ACLS");
+            PkgSupport::assertContains($exec, $src, "$f exec line");
+            PkgSupport::assertContains('WEBPULSE_BIN', $src);
+            PkgSupport::assertContains('/usr/local/webpulse/bin/webpulse', $src);
+            PkgSupport::assertNotContains('php', strtolower($src), "$f has no PHP left");
+        }
+    },
+
+    'pkg_static: the PHP library and the WHM Edge class are gone; the shims are thin' => static function () use ($repo): void {
+        PkgSupport::assertMissing("$repo/whm/lib");
+        PkgSupport::assertMissing("$repo/cpanel/webpulse/lib/bootstrap.php");
+        foreach (['index.live.php', 'api.live.php'] as $f) {
+            $src = (string) file_get_contents("$repo/cpanel/webpulse/$f");
+            PkgSupport::assertContains('CgiBridge::run', $src, "$f runs the binary");
+            PkgSupport::assertNotContains('autoload', $src, "$f has no autoloader");
+            PkgSupport::assertNotContains('WebPulse\\App', $src, "$f does not boot a PHP engine");
+            PkgSupport::assertTrue(substr_count($src, "\n") < 70, "$f stays thin");
+        }
+        $lib = (string) file_get_contents("$repo/installer/lib.sh");
+        foreach (['PHP_BIN', 'wp_json_patch', 'wp_detect_php', 'wp_php_ok', 'cp -a "$rel/lib/."'] as $gone) {
+            PkgSupport::assertNotContains($gone, $lib, "installer/lib.sh no longer has $gone");
         }
     },
 
@@ -169,11 +190,45 @@ return [
         ], $jobs, 'cron jobs');
     },
 
-    'pkg_static: CHANGELOG, INSTALL doc and CI workflow exist' => static function () use ($repo): void {
-        PkgSupport::assertContains('## [0.1.0]', (string) file_get_contents("$repo/CHANGELOG.md"));
-        PkgSupport::assertContains('Troubleshooting', (string) file_get_contents("$repo/docs/INSTALL.md"));
+    'pkg_static: Makefile has the documented targets and uses the Rust binary' => static function () use ($repo): void {
+        $mk = (string) file_get_contents("$repo/Makefile");
+        foreach (['build', 'test', 'lint', 'fixtures', 'serve', 'serve-admin', 'dist', 'release', 'geoip-fixture', 'clean'] as $target) {
+            PkgSupport::assertTrue(preg_match('/^' . preg_quote($target, '/') . ':/m', $mk) === 1, "make $target exists");
+        }
+        PkgSupport::assertContains('cargo build --release', str_replace('$(CARGO)', 'cargo', $mk));
+        PkgSupport::assertContains('tests/run.php pkg_', $mk);
+        PkgSupport::assertContains('scripts/build_release.sh', $mk);
+        PkgSupport::assertNotContains('bin/webpulse serve', $mk, 'no PHP launcher');
+        if (PkgSupport::have('make')) {
+            [$rc, $out] = PkgSupport::run(['make', '-n', '-C', $repo, 'test', 'lint', 'dist', 'release', 'serve', 'serve-admin', 'fixtures', 'geoip-fixture']);
+            PkgSupport::assertSame(0, $rc, "make -n: $out");
+        }
+    },
+
+    'pkg_static: CI and release workflows' => static function () use ($repo): void {
         $ci = (string) file_get_contents("$repo/.github/workflows/ci.yml");
-        PkgSupport::assertContains('shivammathur/setup-php', $ci);
-        PkgSupport::assertContains('make test', $ci);
+        foreach (['cargo fmt --check', 'cargo clippy --all-targets -- -D warnings', 'cargo test --release', 'php tests/run.php pkg_', 'shellcheck', 'tests/parity/run.sh'] as $needle) {
+            PkgSupport::assertContains($needle, $ci, 'ci.yml');
+        }
+        $rel = (string) file_get_contents("$repo/.github/workflows/release.yml");
+        foreach (["tags:", "'v*'", 'x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl', 'cargo-zigbuild', 'setup-zig', 'scripts/build_release.sh', 'scripts/build_dist.sh', '.sha256'] as $needle) {
+            PkgSupport::assertContains($needle, $rel, 'release.yml');
+        }
+        if (PkgSupport::have('python3')) {
+            [$rc, $out] = PkgSupport::run(['python3', '-I', '-c', "import sys\ntry:\n    import yaml\nexcept ImportError:\n    sys.exit(3)\nfor f in sys.argv[1:]:\n    yaml.safe_load(open(f))", "$repo/.github/workflows/ci.yml", "$repo/.github/workflows/release.yml"]);
+            PkgSupport::assertTrue($rc === 0 || $rc === 3, "workflow YAML parses\n$out");
+        }
+    },
+
+    'pkg_static: CHANGELOG, INSTALL doc and Cargo metadata' => static function () use ($repo): void {
+        $changelog = (string) file_get_contents("$repo/CHANGELOG.md");
+        PkgSupport::assertContains('## [0.1.0]', $changelog);
+        PkgSupport::assertContains('## [0.2.0]', $changelog);
+        PkgSupport::assertContains('Rewritten in Rust', $changelog);
+        PkgSupport::assertContains('Troubleshooting', (string) file_get_contents("$repo/docs/INSTALL.md"));
+        $cargo = (string) file_get_contents("$repo/Cargo.toml");
+        foreach (['description', 'license', 'repository', 'readme'] as $key) {
+            PkgSupport::assertTrue(preg_match('/^' . $key . '\s*=/m', $cargo) === 1, "Cargo.toml [package] has $key");
+        }
     },
 ];

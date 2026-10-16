@@ -140,7 +140,7 @@ dashboard shows a notice with the date of the change. This is expected.
 ## The installer rolled back
 
 Read the `Step failed` block above the rollback message. It shows the command, the exit status and
-the output. Typical causes: no Jupiter theme, PHP without `pdo_sqlite`, GitHub not reachable, a hook
+the output. Typical causes: no Jupiter theme, a checksum mismatch, GitHub not reachable, a hook
 registration refused by cPanel. Fix the cause and run the installer again. Hooks that are already
 registered are detected and skipped.
 

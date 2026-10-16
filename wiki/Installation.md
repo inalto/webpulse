@@ -3,7 +3,7 @@
 This page explains how to install WebPulse on a cPanel & WHM server with the installer script. If you
 cannot pipe a script into a shell, see [[Manual Installation]].
 
-> WebPulse 0.1.0 was developed without a real cPanel server. The installer is tested against a fake
+> WebPulse 0.2.0 (the Rust rewrite) was developed without a real cPanel server. The installer is tested against a fake
 > cPanel root, but the calls to cPanel's own tools (`install_plugin`, `register_appconfig`,
 > `manage_hooks`) have not yet been verified on a live server. If a step fails, the installer undoes
 > what it did and prints the failing command. Please report what you see.
@@ -15,10 +15,11 @@ cannot pipe a script into a shell, see [[Manual Installation]].
 | Control panel | cPanel & WHM with the **Jupiter** theme. The documentation targets cPanel 110 or later. The installer does not check the cPanel version. |
 | Operating system | AlmaLinux, Rocky Linux, CloudLinux or Ubuntu (the systems cPanel supports). |
 | Web server | Apache (EasyApache 4) or ea-nginx, writing one access log per domain in the **combined** format (the cPanel default). |
-| PHP | 8.1 or later with `pdo_sqlite`. cPanel's `/usr/local/cpanel/3rdparty/bin/php` qualifies; otherwise the installer uses `php` from `PATH`. |
+| CPU | Linux **x86_64** or **aarch64**. The prebuilt binary is statically linked and runs on every distribution. |
+| Runtime | Nothing to install. WebPulse is a single binary; there is no PHP library, no interpreter and no SQLite package to add. cPanel's own PHP (`/usr/local/cpanel/3rdparty/bin/php`) runs the two small shims of the cPanel page, and the installer only warns when it is missing. |
 | Privileges | You must run the installer as **root**. |
-| Tools | `curl` or `wget`, `tar`, `cp`, `mv`, `ln`, `rm`, `mkdir`, `chmod`, `find`, `sed`, `grep`, `diff`. |
-| Network | Outbound HTTPS to `codeload.github.com`, and to `download.db-ip.com` for GeoIP. |
+| Tools | `curl` or `wget`, `tar`, `sha256sum`, `cp`, `mv`, `ln`, `rm`, `mkdir`, `chmod`, `find`, `sed`, `grep`, `awk`, `diff`. |
+| Network | Outbound HTTPS to `github.com` and `api.github.com`, and to `download.db-ip.com` for GeoIP. Not needed for [air-gapped installs](#air-gapped-servers-and-your-own-build). |
 
 ## One-line install
 
@@ -40,16 +41,33 @@ less install.sh
 bash install.sh --geoip
 ```
 
-From a git checkout or an unpacked release, `bash install.sh` installs the code next to it.
+The installer downloads the release for your CPU (`webpulse-<version>-x86_64-unknown-linux-musl.tar.gz` or
+`...-aarch64-...`), verifies its **sha256 checksum** and only then changes anything. From an unpacked
+release tarball, `bash install.sh` installs the files next to it.
 When stdin is not a terminal, as in `curl | bash`, the installer does not ask for confirmation.
+
+### Air-gapped servers and your own build
+
+* **No internet on the server.** On another machine download the release tarball for the server's CPU
+  and its `.sha256` from the [releases page](https://github.com/inalto/webpulse/releases), check it with
+  `sha256sum -c`, copy it over, then `tar -xzf` it and run `./install.sh` inside. It finds `bin/webpulse`
+  next to itself and downloads nothing.
+* **Your own binary.** `./install.sh --binary /path/to/webpulse` installs that binary instead of the
+  release's.
+* **Build on the server.** `install.sh --build` downloads the source of `--ref` and runs
+  `cargo build --release --locked` (needs the Rust toolchain, <https://rustup.rs>). The installer does the
+  same on its own when a release has no binary for your architecture and `cargo` is present; without
+  `cargo` it stops with a message that names the three options.
 
 ## Flags
 
 | Flag | Meaning |
 |------|---------|
 | `--geoip` | Set `geoip.enabled` and download the free DB-IP country database. A failed download is only a warning. |
-| `--ref <branch\|tag>` | Install this git ref. Default `main` (env `WEBPULSE_REF`). Use a tag only after it has been published. |
+| `--ref <tag>` | Install this release, `v0.2.0` or `0.2.0`. Default `main`, which means **the latest release** (env `WEBPULSE_REF`). A branch name is built from source (needs `cargo`). |
 | `--repo <owner/name>` | Install from this GitHub repository. Default `inalto/webpulse` (env `WEBPULSE_REPO`). |
+| `--build` | Build the binary from source with `cargo` instead of downloading it. Fails clearly when `cargo` is missing. |
+| `--binary <file>` | Install this binary instead of the release's. |
 | `--no-cron` | Do not write `/etc/cron.d/webpulse`. Nothing collects data until you schedule `webpulse collect`. |
 | `--update` | Update an existing installation. See [[Updating and Uninstalling]]. |
 | `--uninstall` | Remove WebPulse; statistics and configuration are kept. |
@@ -64,25 +82,29 @@ When stdin is not a terminal, as in `curl | bash`, the installer does not ask fo
 
 ## What happens, step by step
 
-1. **Checks.** Root, `/usr/local/cpanel/cpanel`, a suitable PHP, the required tools.
-2. **Download.** `https://codeload.github.com/<repo>/tar.gz/<ref>` is unpacked in a temporary
-   directory. An archive without `bin/webpulse` and `installer/lib.sh` is refused.
-3. **Staging.** The release goes to `/usr/local/webpulse-releases/<version>/`. The shebang of
-   `bin/webpulse` is rewritten to the PHP the installer found.
+1. **Checks.** Root, `/usr/local/cpanel/cpanel`, the required tools.
+2. **Download.** The installer maps `uname -m` to `x86_64-unknown-linux-musl` or
+   `aarch64-unknown-linux-musl`, finds the latest release (or the `--ref` tag), downloads
+   `webpulse-<version>-<target>.tar.gz` and its `.sha256` from GitHub, **verifies the checksum** and
+   unpacks the archive in a temporary directory. A mismatch, or an archive that does not look like
+   WebPulse, stops the installer before anything is changed.
+3. **Staging.** The release goes to `/usr/local/webpulse-releases/<version>/`; `bin/webpulse` (mode 0755) is
+   started once with `--version` to check that it runs on this machine.
 4. **Setup.** `webpulse setup` creates `/etc/webpulse/config.json` (mode 0600), `/var/webpulse/`
    (`data/`, `log/`, `run/`, `geoip/`), the registry database, and a data directory per cPanel account.
 5. **Activation.** `/usr/local/webpulse` becomes a symlink to the release, swapped atomically. The
    three newest releases are kept.
-6. **cPanel plugin.** Files are copied to `/usr/local/cpanel/base/frontend/jupiter/webpulse/` and
+6. **cPanel plugin.** The two small PHP shims are copied to `/usr/local/cpanel/base/frontend/jupiter/webpulse/` and
    registered with `install_plugin`. The icon appears in the *Metrics* group.
-7. **WHM plugin.** CGI scripts go to `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/`, the icon to
+7. **WHM plugin.** The two bash CGI shims go to `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/`, the icon to
    `.../addon_plugins/webpulse.png`, and `register_appconfig` creates `/var/cpanel/apps/webpulse.conf`.
    `cpsrvd` is restarted only if the registration says it must be.
 8. **Hooks.** `manage_hooks add script` registers `stats_runall_pre.sh` (`Stats::RunAll`) and
    `stats_runuser_pre.sh` (`Stats::RunUser`), stage `pre`. A hook that is already registered is
    skipped. `/var/webpulse/run/hook` is created with mode 1777.
 9. **Cron.** `/etc/cron.d/webpulse` is written (see [[Command Line]] for the schedule).
-10. **GeoIP** (only with `--geoip`) and a **first collection** started in the background.
+10. **GeoIP** (only with `--geoip`: `webpulse config set geoip.enabled true` and `webpulse geoip-update`) and a
+    **first collection** started in the background.
 11. **Summary** with the WHM and cPanel URLs, the config path and the uninstall command.
 
 If a step fails, the installer prints `Step failed`, the command, its exit status and its output, then

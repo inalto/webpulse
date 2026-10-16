@@ -17,12 +17,12 @@ detects `/usr/local/webpulse/bin/webpulse` and updates in place. If WebPulse is 
 
 ### What an update does
 
-1. Downloads the requested ref (default `main`) and stages it as
-   `/usr/local/webpulse-releases/<version>/`. If a directory with that version already exists and is
+1. Downloads the requested release (default: the latest; `webpulse-<version>-<target>.tar.gz` for your CPU),
+   **verifies its sha256 checksum** and stages it as `/usr/local/webpulse-releases/<version>/`. If a directory with that version already exists and is
    identical, it is reused; if it differs, the new one gets a timestamp suffix.
 2. Runs `webpulse setup`, which creates what is missing and migrates the database schema.
 3. Swaps the `/usr/local/webpulse` symlink to the new release.
-4. Refreshes the cPanel plugin files in the theme directories, the WHM CGI scripts and icon, and
+4. Refreshes the cPanel shim files in the theme directories, the WHM CGI shims and icon, and
    re-runs the registrations. A registration that is already in place is reported as such.
 5. Rewrites `/etc/cron.d/webpulse` only if its content changed.
 6. Keeps the three newest releases and removes older ones. The release that is active, and the one
@@ -35,13 +35,23 @@ Running `--update` twice is harmless.
 If the update fails half-way, the installer rolls back: the symlink returns to the previous release and
 the plugin files are restored from it.
 
+### Updating from 0.1.0 (PHP) to 0.2.0 (Rust)
+
+The same command. The installer replaces the PHP launcher `bin/webpulse` by the binary at the same path,
+removes the PHP library copies from the cPanel plugin directory and keeps `/etc/webpulse` and
+`/var/webpulse`: the 0.2.0 binary opens 0.1.0 databases as they are, and 0.1.0 can open the databases
+again if you roll back. `php_bin` in `config.json` is no longer used.
+
 ### Choosing a version
 
 ```bash
-... | bash -s -- --update --ref v0.1.0      # a tag, once it has been published
-... | bash -s -- --update --ref some-branch
-... | bash -s -- --update --repo yourname/webpulse   # a fork
+... | bash -s -- --update --ref v0.2.0      # a release tag
+... | bash -s -- --update --build           # compile the source with cargo instead of downloading a binary
+... | bash -s -- --update --binary /root/webpulse   # a binary you provide
+... | bash -s -- --update --repo yourname/webpulse   # a fork's releases
 ```
+
+A branch name (`--ref some-branch`) has no prebuilt binary: it is built from source and needs `cargo`.
 
 ### Themes other than Jupiter
 
@@ -71,8 +81,8 @@ ls /usr/local/webpulse-releases/
 ln -sfn /usr/local/webpulse-releases/<old-version> /usr/local/webpulse
 ```
 
-Then repeat steps 3 and 4 of [[Manual Installation]] (copy the cPanel plugin files and the WHM CGI
-files). The hooks and the cron file refer to `/usr/local/webpulse`, so they keep working. Running
+Then repeat steps 3 and 4 of [[Manual Installation]] (copy the cPanel shim files and the WHM CGI
+shims). The hooks and the cron file refer to `/usr/local/webpulse`, so they keep working. Running
 `install.sh` from inside `/usr/local/webpulse-releases/` does not reinstall that release: it downloads
 a fresh copy. The alternative is `install.sh --update --ref <tag>` with the tag of the old version.
 

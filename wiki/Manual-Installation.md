@@ -7,39 +7,43 @@ cPanel & WHM server with the Jupiter theme.
 > The installer is tested against a fake cPanel root; the cPanel tools used below have not yet been
 > verified on a live server by the project. Read each command's output.
 
-You still need PHP 8.1 or later with `pdo_sqlite` (see [[Installation]]).
+You need no PHP, Rust or SQLite: WebPulse is one static binary (see [[Installation]]).
+is the output of `uname -m`, `x86_64` or `aarch64`.
 
-## 1. Get the code and stage the release
+## 1. Get the release and stage it
 
-Download a tarball on any machine, review it, and copy it to the server, or fetch it directly:
+Download the tarball on any machine, check its checksum, review the contents, and copy it to the server,
+or fetch it directly:
 
 ```bash
-REF=main                                   # a branch or, once published, a tag such as v0.1.0
-PHP=/usr/local/cpanel/3rdparty/bin/php     # or the path of another PHP >= 8.1 with pdo_sqlite
-"$PHP" -r 'exit(PHP_VERSION_ID >= 80100 && extension_loaded("pdo_sqlite") ? 0 : 1);' && echo "PHP ok"
-
-SRC=$(mktemp -d)
-curl -fsSL "https://codeload.github.com/inalto/webpulse/tar.gz/$REF" \
-  | tar -xz -C "$SRC" --strip-components=1 --no-same-owner
-test -f "$SRC/bin/webpulse" && VER=$(tr -d ' \t\r\n' < "$SRC/VERSION") && echo "version $VER"
+VER=0.2.0                                  # a published release
+T=$(uname -m)-unknown-linux-musl           # x86_64-unknown-linux-musl or aarch64-unknown-linux-musl
+cd /root
+curl -fsSLO https://github.com/inalto/webpulse/releases/download/v$VER/webpulse-$VER-$T.tar.gz
+curl -fsSLO https://github.com/inalto/webpulse/releases/download/v$VER/webpulse-$VER-$T.tar.gz.sha256
+sha256sum -c webpulse-$VER-$T.tar.gz.sha256        # must print: ...tar.gz: OK
 
 REL=/usr/local/webpulse-releases/$VER
 mkdir -p "$REL"
-cp -a "$SRC"/. "$REL"/
+tar -xzf webpulse-$VER-$T.tar.gz --strip-components=1 --no-same-owner -C "$REL"
 ```
 
-The installer copies only `bin lib ui cpanel whm hooks etc installer scripts docs VERSION LICENSE
-README.md CHANGELOG.md install.sh uninstall.sh Makefile`. You may delete `tests/` and other files
-from `$REL`.
+The tarball contains `bin/webpulse`, `cpanel/`, `whm/`, `hooks/`, `etc/`, `installer/`, `install.sh`,
+`uninstall.sh`, `VERSION`, `LICENSE`, `README.md` and `CHANGELOG.md` (the layout is described in the
+[technical installation notes](https://github.com/inalto/webpulse/blob/main/docs/INSTALL.md)).
 
-Fix the PHP in the shebang and the permissions:
+No release for your platform? Build the binary yourself (`cargo build --release` in a checkout, see
+[[Development]]) and put it at `$REL/bin/webpulse` together with the other directories of a checkout
+(`cpanel whm hooks etc installer install.sh uninstall.sh VERSION LICENSE README.md`).
+
+Fix the permissions and check that the binary runs:
 
 ```bash
-sed -i "1s|^#!.*|#!$PHP|" "$REL/bin/webpulse"
 find "$REL" -type d -exec chmod 755 {} +
 find "$REL" -type f -exec chmod go+r,go-w {} +
 chmod 755 "$REL/bin/webpulse" "$REL"/hooks/*.sh "$REL"/whm/cgi/*.cgi "$REL/install.sh" "$REL/uninstall.sh"
 chown -R root:root "$REL"
+"$REL/bin/webpulse" --version
 ```
 
 ## 2. Create the configuration and data directories
@@ -59,10 +63,8 @@ releases later.
 
 ```bash
 T=/usr/local/cpanel/base/frontend/jupiter/webpulse
-mkdir -p $T/lib
+mkdir -p $T
 cp -a /usr/local/webpulse/cpanel/webpulse/. $T/
-cp -a /usr/local/webpulse/lib/. $T/lib/
-cp -a /usr/local/webpulse/ui $T/ui
 cp /usr/local/webpulse/VERSION $T/VERSION
 find $T -type d -exec chmod 755 {} +
 find $T -type f -exec chmod 644 {} +
@@ -70,10 +72,13 @@ chown -R root:root $T
 /usr/local/cpanel/scripts/install_plugin /usr/local/webpulse/cpanel/plugin --theme jupiter
 ```
 
-The plugin runs as the account user, so it gets its own copy of `lib/` and `ui/`. Repeat the block
-with another theme name if you use one.
+The plugin consists of two small PHP shims (`index.live.php`, `api.live.php`, plus `lib/LiveApiUser.php`
+and `lib/CgiBridge.php`) that run as the account user on cPanel's PHP and start
+`/usr/local/webpulse/bin/webpulse cgi`. Repeat the block with another theme name if you use one.
 
 ## 4. WHM plugin
+
+The CGI files are bash shims that `exec /usr/local/webpulse/bin/webpulse cgi --whm ...`.
 
 ```bash
 mkdir -p /usr/local/cpanel/whostmgr/docroot/cgi/webpulse
@@ -116,8 +121,8 @@ The schedule is in [[Command Line]].
 /usr/local/webpulse/bin/webpulse geoip-update
 ```
 
-The installer writes `geoip.enabled` into `config.json`; `config set` stores it in the registry
-instead, with the same effect.
+`config set` stores the setting in the registry, where it wins over `config.json`; the installer's `--geoip`
+does exactly the same.
 
 ## 8. First collection and check
 
@@ -131,7 +136,7 @@ Then open **WHM » Plugins » WebPulse Analytics** and **cPanel » Metrics » We
 ## Differences from the installer
 
 The installer additionally does the following, which you do not need to repeat by hand: it keeps only
-the three newest releases, undoes its own work if a step fails, and replaces an existing plain
+the three newest releases, verifies the download, undoes its own work if a step fails, and replaces an existing plain
 `/usr/local/webpulse` directory by moving it to `/usr/local/webpulse-releases/legacy-<timestamp>`.
 
 ## See also

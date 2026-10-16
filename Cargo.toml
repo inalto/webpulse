@@ -2,6 +2,14 @@
 name = "webpulse"
 version = "0.1.0"
 edition = "2024"
+description = "Lightweight, log-based web analytics for cPanel & WHM: collector, CLI, JSON API and dashboard in one static binary"
+license = "MIT"
+repository = "https://github.com/inalto/webpulse"
+homepage = "https://github.com/inalto/webpulse"
+readme = "README.md"
+keywords = ["analytics", "cpanel", "whm", "access-logs"]
+categories = ["command-line-utilities", "web-programming"]
+publish = false
 
 [dependencies]
 anyhow = "1.0.104"
@@ -17,8 +25,11 @@ rand = "0.10.3"
 regex = "1.13.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha1 = "0.11.0"
 sha2 = "0.11.1"
+foldhash = "0.2.0"
+indexmap = { version = "2.14.2", features = ["serde"] }
 thiserror = "2.0.21"
 tiny_http = "0.12.0"
 ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzip"] }

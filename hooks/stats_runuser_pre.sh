@@ -29,25 +29,31 @@ fi
 
 FLAG_DIR=${WEBPULSE_HOOK_DIR:-/var/webpulse/run/hook}
 
-PHP=${WEBPULSE_PHP:-/usr/local/cpanel/3rdparty/bin/php}
-if [ ! -x "$PHP" ]; then
-    PHP=$(command -v php 2>/dev/null || true)
-fi
-[ -n "$PHP" ] && [ -x "$PHP" ] || exit 0
+# Extract data.user from the JSON payload on STDIN with plain bash (no interpreter, no
+# binary, no jq: this runs as the account on every cPanel box). Only a string that
+# matches the cPanel user name grammar is accepted; anything else is ignored.
+payload=$(head -c 65536 2>/dev/null | tr -d '\r\n') || payload=''
 
-# shellcheck disable=SC2016  # the PHP code is deliberately single-quoted
-"$PHP" -r '
-$flagDir = $argv[1] ?? "";
-$raw = @file_get_contents("php://stdin");
-$json = is_string($raw) ? json_decode($raw, true) : null;
-$user = is_array($json) && isset($json["data"]) && is_array($json["data"]) ? ($json["data"]["user"] ?? null) : null;
-if ($flagDir === "" || !is_string($user) || preg_match("/^[a-z0-9_][a-z0-9_-]{0,31}\\z/", $user) !== 1) {
-    exit(0);
-}
-$file = rtrim($flagDir, "/") . "/" . $user;
-if (is_dir($flagDir) && !is_link($file)) {
-    @touch($file);
-}
-' -- "$FLAG_DIR" >/dev/null 2>&1 || true
+user=''
+case $payload in
+    *'"data"'*)
+        rest=${payload#*'"data"'}
+        if [[ $rest =~ ^[[:space:]]*:[[:space:]]*\{ ]]; then
+            if [[ $rest == *'"user"'* ]]; then
+                rest=${rest#*'"user"'}
+                if [[ $rest =~ ^[[:space:]]*:[[:space:]]*\"([a-z0-9_][a-z0-9_-]{0,31})\" ]]; then
+                    user=${BASH_REMATCH[1]}
+                fi
+            fi
+        fi
+        ;;
+esac
+
+if [ -n "$user" ] && [ -d "$FLAG_DIR" ]; then
+    flag="${FLAG_DIR%/}/$user"
+    if [ ! -L "$flag" ]; then
+        touch -- "$flag" >/dev/null 2>&1 || true
+    fi
+fi
 
 exit 0

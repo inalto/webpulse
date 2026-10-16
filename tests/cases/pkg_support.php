@@ -7,6 +7,13 @@ declare(strict_types=1);
  * Returns no tests itself; the other pkg_*.php files require_once it.
  */
 
+if (!class_exists('PkgSkip', false)) {
+    /** Thrown by a test that cannot run on this machine (reported as SKIP by tests/run.php). */
+    final class PkgSkip extends \RuntimeException
+    {
+    }
+}
+
 if (!class_exists('PkgSupport', false)) {
     final class PkgSupport
     {
@@ -21,6 +28,29 @@ if (!class_exists('PkgSupport', false)) {
         public static function fail(string $message): never
         {
             throw new \RuntimeException($message);
+        }
+
+        public static function skip(string $reason): never
+        {
+            throw new PkgSkip($reason);
+        }
+
+        /** Is an external program available? */
+        public static function have(string $program): bool
+        {
+            [$rc] = self::run(['sh', '-c', 'command -v "$1" >/dev/null 2>&1', 'x', $program]);
+            return $rc === 0;
+        }
+
+        /** Write an executable script. */
+        public static function script(string $path, string $body): string
+        {
+            if (!is_dir(dirname($path))) {
+                mkdir(dirname($path), 0777, true);
+            }
+            file_put_contents($path, $body);
+            chmod($path, 0755);
+            return $path;
         }
 
         public static function assertTrue(mixed $cond, string $message): void
@@ -249,19 +279,46 @@ esac',
             }
         }
 
+        /** Body of the stub WebPulse binary: logs its arguments, fakes `setup`. */
+        public static function stubBinaryBody(string $marker = 'stub'): string
+        {
+            $body = <<<'SH'
+#!/bin/bash
+# stub binary used by the packaging tests (@MARKER@)
+if [ -n "$STUB_ENGINE_LOG" ]; then
+    echo "$* [cfg=$WEBPULSE_CONFIG]" >> "$STUB_ENGINE_LOG"
+fi
+case "$1" in
+    --version) echo "webpulse 0.0.0-@MARKER@"; exit 0 ;;
+    setup)
+        if [ -n "$STUB_SETUP_FAIL" ]; then echo "setup exploded" >&2; exit 7; fi
+        [ -f "$WEBPULSE_CONFIG" ] || { echo "stub engine: no config" >&2; exit 1; }
+        for k in data_dir log_dir run_dir; do
+            d=$(sed -n "s/.*\"$k\": *\"\([^\"]*\)\".*/\1/p" "$WEBPULSE_CONFIG" | head -n 1)
+            if [ -n "$d" ]; then mkdir -p "$d"; fi
+        done
+        ;;
+esac
+exit 0
+
+SH;
+            return str_replace('@MARKER@', $marker, $body);
+        }
+
         /**
-         * Create a self-contained source tree: the real packaging files plus a
-         * stub engine that records its invocations (so the test does not depend
-         * on the progress of the engine package).
+         * Create a self-contained unpacked release: the real packaging files plus a
+         * stub binary that records its invocations (bin/webpulse) and a stub default
+         * config (so the test does not depend on the progress of the Rust code).
+         * This is the layout scripts/build_release.sh produces.
          */
-        public static function makeSource(array $p, string $version = '0.1.0', ?string $dir = null): string
+        public static function makeSource(array $p, string $version = '0.1.0', ?string $dir = null, string $marker = 'stub'): string
         {
             $src = $dir ?? $p['src'];
             if (!is_dir($src)) {
                 mkdir($src, 0777, true);
             }
             $repo = self::repo();
-            foreach (['cpanel', 'whm', 'hooks', 'installer', 'install.sh', 'uninstall.sh', 'scripts'] as $item) {
+            foreach (['cpanel', 'whm', 'hooks', 'installer', 'install.sh', 'uninstall.sh'] as $item) {
                 [$rc, $out] = self::run(['cp', '-a', "$repo/$item", "$src/$item"]);
                 if ($rc !== 0) {
                     self::fail("cp $item: $out");
@@ -272,6 +329,7 @@ esac',
             copy("$repo/etc/cron.d/webpulse", "$src/etc/cron.d/webpulse");
             file_put_contents("$src/etc/config.json.default", json_encode([
                 'version' => 1,
+                'exclude_paths' => ['/.well-known/', '/cpanel'],
                 'geoip' => ['enabled' => false, 'country_db' => '/var/webpulse/geoip/dbip-country-lite.mmdb', 'city_db' => null],
                 'php_bin' => null,
                 'paths' => [
@@ -284,36 +342,57 @@ esac',
                     'userdomains_file' => '/etc/userdomains',
                     'cpanel_users_dir' => '/var/cpanel/users',
                     'home_root' => '/home',
+                    'cron_file' => '/etc/cron.d/webpulse',
+                    'hooks_file' => '/var/cpanel/hooks/data/hooks.json',
                 ],
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
-            // stub engine
-            mkdir("$src/bin", 0777, true);
-            file_put_contents("$src/bin/webpulse", <<<'PHP'
-#!/usr/bin/env php
-<?php
-// stub engine used by the installer tests
-$log = getenv('STUB_ENGINE_LOG');
-if ($log) {
-    file_put_contents($log, implode(' ', array_slice($argv, 1)) . ' [cfg=' . getenv('WEBPULSE_CONFIG') . "]\n", FILE_APPEND);
-}
-if (($argv[1] ?? '') === 'setup') {
-    $cfg = json_decode((string) @file_get_contents((string) getenv('WEBPULSE_CONFIG')), true);
-    if (!is_array($cfg)) { fwrite(STDERR, "stub engine: no config\n"); exit(1); }
-    foreach (['data_dir', 'log_dir', 'run_dir'] as $k) {
-        @mkdir($cfg['paths'][$k], 0700, true);
-    }
-}
-if (($argv[1] ?? '') === 'setup' && getenv('STUB_SETUP_FAIL')) { fwrite(STDERR, "setup exploded\n"); exit(7); }
-exit(0);
-PHP);
-            chmod("$src/bin/webpulse", 0755);
-            mkdir("$src/lib/WebPulse", 0777, true);
-            file_put_contents("$src/lib/autoload.php", "<?php\n// stub autoloader\n");
-            file_put_contents("$src/lib/WebPulse/App.php", "<?php\n// stub\n");
-            mkdir("$src/ui", 0777, true);
-            file_put_contents("$src/ui/app.css", "/* stub */\n");
+            self::script("$src/bin/webpulse", self::stubBinaryBody($marker));
+            foreach (['LICENSE', 'README.md'] as $f) {
+                copy("$repo/$f", "$src/$f");
+            }
             file_put_contents("$src/VERSION", $version . "\n");
             return $src;
+        }
+
+        /**
+         * Pack an unpacked release like scripts/build_release.sh does: one top-level
+         * directory webpulse-<ver>-<target>/, plus a .sha256 next to the tarball.
+         *
+         * @return array{0:string,1:string} tarball path, sha256 file path
+         */
+        public static function releaseTarball(string $srcDir, string $outDir, string $target = 'x86_64-unknown-linux-musl'): array
+        {
+            $ver = trim((string) file_get_contents("$srcDir/VERSION"));
+            $name = "webpulse-$ver-$target";
+            if (!is_dir($outDir)) {
+                mkdir($outDir, 0777, true);
+            }
+            $tarball = "$outDir/$name.tar.gz";
+            [$rc, $out] = self::run(['tar', '-czf', $tarball, '--transform', "s,^\\.,$name,", '-C', $srcDir, '.']);
+            if ($rc !== 0) {
+                self::fail("tar: $out");
+            }
+            file_put_contents("$tarball.sha256", hash_file('sha256', $tarball) . "  $name.tar.gz\n");
+            return [$tarball, "$tarball.sha256"];
+        }
+
+        /** Environment that redirects install.sh into the sandbox. @return array<string,string> */
+        public static function installerEnv(array $p): array
+        {
+            return [
+                'WEBPULSE_PREFIX' => $p['prefix'],
+                'WEBPULSE_FAKE_CPANEL' => '1',
+                'WEBPULSE_CPANEL_ROOT' => $p['cpanel'],
+                'WEBPULSE_ETC' => $p['etc'],
+                'WEBPULSE_VAR' => $p['var'],
+                'WEBPULSE_CRON_DIR' => $p['cron'],
+                'WEBPULSE_APPS_DIR' => $p['apps'],
+                'WEBPULSE_SKIP_FIRST_COLLECT' => '1',
+                'WEBPULSE_CARGO' => '/nonexistent/cargo', // never build for real by accident
+                'STUB_ENGINE_LOG' => $p['engine_log'],
+                'TMPDIR' => $p['base'],
+                'NO_COLOR' => '1',
+            ];
         }
 
         /**
@@ -326,20 +405,18 @@ PHP);
          */
         public static function installer(array $p, string $srcDir, array $args, array $env = []): array
         {
-            $env = array_merge([
-                'WEBPULSE_PREFIX' => $p['prefix'],
-                'WEBPULSE_FAKE_CPANEL' => '1',
-                'WEBPULSE_CPANEL_ROOT' => $p['cpanel'],
-                'WEBPULSE_ETC' => $p['etc'],
-                'WEBPULSE_VAR' => $p['var'],
-                'WEBPULSE_CRON_DIR' => $p['cron'],
-                'WEBPULSE_APPS_DIR' => $p['apps'],
-                'WEBPULSE_SKIP_FIRST_COLLECT' => '1',
-                'STUB_ENGINE_LOG' => $p['engine_log'],
-                'TMPDIR' => $p['base'],
-                'NO_COLOR' => '1',
-            ], $env);
-            return self::run(array_merge(['bash', "$srcDir/install.sh"], $args), $env, '');
+            return self::run(array_merge(['bash', "$srcDir/install.sh"], $args), array_merge(self::installerEnv($p), $env), '');
+        }
+
+        /**
+         * Run the installer the way `curl | bash` does (script on stdin, no local source).
+         *
+         * @return array{0:int,1:string}
+         */
+        public static function installerPiped(array $p, array $args, array $env = []): array
+        {
+            $script = (string) file_get_contents(self::repo() . '/install.sh');
+            return self::run(array_merge(['bash', '-s', '--'], $args), array_merge(self::installerEnv($p), $env), $script);
         }
 
         /** @return list<string> */

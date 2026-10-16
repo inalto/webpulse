@@ -53,7 +53,7 @@ The file shipped as `etc/config.json.default`:
 | `count_head_requests` | `false` | yes | Count `HEAD` and `OPTIONS` requests. |
 | `static_prefixes` | `/wp-content/uploads/`, `/wp-includes/`, `/wp-json/`, `/wp-admin/admin-ajax.php`, `/wp-cron.php`, `/xmlrpc.php` | yes | Paths treated as static files, not pageviews. Built-in default; not in the shipped file. |
 | `max_open_visits` | `50000` | no | Safety cap on visits kept open in memory per domain. Built-in default; not in the shipped file. When exceeded, the oldest idle visits are closed early and a warning is logged. |
-| `php_bin` | `null` | no | PHP binary to run the CLI and WHM jobs with, if it differs from the interpreter that started `webpulse`. |
+| `php_bin` | `null` | no | Obsolete since 0.2.0 (the program no longer uses PHP). Ignored; kept so existing files stay valid. |
 
 ### GeoIP
 

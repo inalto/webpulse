@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-/* WP3: Standardized Hook scripts (--describe, flag file for Stats::RunUser). */
+/* Standardized Hook scripts (--describe, flag file for Stats::RunUser, RunAll). */
 
 require_once __DIR__ . '/pkg_support.php';
 
@@ -39,6 +39,36 @@ return [
         PkgSupport::assertSame('', $out, 'silent');
         PkgSupport::assertExists("$dir/alice");
         PkgSupport::assertSame(['alice'], PkgSupport::listTree($dir), 'only the flag was created');
+    },
+
+    'pkg_hooks: RunUser needs neither PHP nor the binary, only plain shell tools' => static function () use ($repo): void {
+        $src = (string) file_get_contents("$repo/hooks/stats_runuser_pre.sh");
+        PkgSupport::assertNotContains('php', strtolower($src), 'no PHP in the hook');
+        PkgSupport::assertNotContains('bin/webpulse', $src, 'independent of the binary');
+        $bin = PkgSupport::tmpDir('hooktools');
+        foreach (['head', 'tr', 'touch', 'dirname', 'basename', 'cat'] as $tool) {
+            [, $path] = PkgSupport::run(['sh', '-c', 'command -v "$1"', 'x', $tool]);
+            symlink(trim($path), "$bin/$tool");
+        }
+        $dir = PkgSupport::tmpDir('hookflag2');
+        [$rc, $out] = PkgSupport::run(['bash', "$repo/hooks/stats_runuser_pre.sh"], ['PATH' => $bin, 'WEBPULSE_HOOK_DIR' => $dir], '{"data":{"user":"alice"}}');
+        PkgSupport::assertSame(0, $rc, $out);
+        PkgSupport::assertExists("$dir/alice");
+    },
+
+    'pkg_hooks: RunUser reads data.user, not another user key, and tolerates whitespace and pretty printing' => static function () use ($repo): void {
+        $dir = PkgSupport::tmpDir('hookjson');
+        $payloads = [
+            'alice' => '{"context":{"user":"root","event":"RunUser"},"data":{"user":"alice","domain":"example.com"}}',
+            'bob_1' => "{\n  \"context\": {\"stage\": \"pre\"},\n  \"data\" : {\n    \"args\": {\"x\": 1},\n    \"user\" :  \"bob_1\"\n  }\n}\n",
+            'carol-2' => '{"data":{"user":"carol-2"},"context":{}}',
+        ];
+        foreach ($payloads as $expected => $payload) {
+            [$rc] = PkgSupport::run(["$repo/hooks/stats_runuser_pre.sh"], ['WEBPULSE_HOOK_DIR' => $dir], $payload);
+            PkgSupport::assertSame(0, $rc);
+            PkgSupport::assertExists("$dir/$expected");
+        }
+        PkgSupport::assertSame(['alice', 'bob_1', 'carol-2'], PkgSupport::listTree($dir), 'exactly the data.user flags, never context.user');
     },
 
     'pkg_hooks: RunUser ignores invalid users and bad payloads, exits 0' => static function () use ($repo): void {

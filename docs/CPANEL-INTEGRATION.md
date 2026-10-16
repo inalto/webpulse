@@ -39,12 +39,19 @@ extract the plugin from the archive"; it only reads `install.json`):
 
 ```
 /usr/local/cpanel/base/frontend/jupiter/webpulse/
-    index.live.php      dashboard page (LiveAPI PHP)
-    api.live.php        JSON API
+    index.live.php      dashboard page: thin shim (LiveAPI PHP)
+    api.live.php        JSON API: thin shim (LiveAPI PHP)
+    lib/LiveApiUser.php resolves the account name from the cPanel session
+    lib/CgiBridge.php   runs `webpulse cgi` and relays status/headers/body
     webpulse.svg        48×48 icon (also referenced by install.json)
-    lib/, ui/, VERSION      copies made by the installer (not symlinks, for
-                            robustness; `install.sh --update` re-copies them)
+    VERSION             copied by the installer (not symlinks, for robustness;
+                        `install.sh --update` re-copies them)
 ```
+Since 0.2.0 there is no PHP library any more: all logic is in the binary
+`/usr/local/webpulse/bin/webpulse`, and the two `*.live.php` files only exist
+because cPanel requires LiveAPI pages to be PHP (or Perl) to use the `CPANEL`
+class (which is also how the account is identified).
+
 `install.json` (in `/usr/local/webpulse/cpanel/plugin/`, together with the icon):
 ```json
 [{"id":"webpulse","name":"WebPulse Analytics","description":"Visitor statistics generated from your access logs",
@@ -60,39 +67,62 @@ Register / unregister:
 Manager, so hosts can hide the icon per package. Collection is governed
 separately by the WHM plugin switches.
 
-LiveAPI usage in `index.live.php` / `api.live.php`:
+The shims (`cpanel/webpulse/*.live.php`):
 ```php
 require_once '/usr/local/cpanel/php/cpanel.php';
-$cpanel = new CPANEL();                       // connects to cpsrvd; one per request
-$info   = $cpanel->uapi('Variables', 'get_user_information', ['name' => 'user']);
-$user   = $info['cpanelresult']['result']['data']['user'] ?? getenv('REMOTE_USER');
-$dom    = $cpanel->uapi('DomainInfo', 'list_domains');   // main_domain, addon_domains[], parked_domains[], sub_domains[]
-print $cpanel->header('WebPulse Analytics');  // Jupiter chrome (index page only)
-…
+$cpanel = new CPANEL();                                  // connects to cpsrvd; one per request
+$user   = LiveApiUser::resolve($cpanel);                 // uapi Variables::get_user_information, REMOTE_USER, euid
+// api.live.php:
+CgiBridge::run(['cgi', '--principal', "user:$user", '--api'], $user, true);
+// index.live.php (between header() and footer(); the binary's headers are not applied):
+print $cpanel->header('WebPulse Analytics');
+CgiBridge::run(['cgi', '--principal', "user:$user", '--page', '--embedded', '--api-url', 'api.live.php'], $user, false);
 print $cpanel->footer();
 $cpanel->end();
 ```
-The LiveAPI PHP runs **as the account user**; it may only read
-`/var/webpulse/data/<user>/` (group-readable) and write
-`/var/webpulse/data/<user>/user/` (owned by the user). `uapi()` return shapes
+`CgiBridge::run()` starts the binary with `proc_open` (argument list, no shell) and:
+* an environment that contains only `REQUEST_METHOD`, `QUERY_STRING`, `CONTENT_TYPE`,
+  `CONTENT_LENGTH`, `HTTP_X_WEBPULSE_REQUEST`, `REMOTE_ADDR`, `REMOTE_USER` (the resolved account),
+  `PATH`, and `WEBPULSE_CONFIG` when it is set;
+* the request body (read from `php://input`, at most 2 MiB) piped to the binary's stdin;
+* the CGI response parsed from its stdout: the `Status:` line becomes `http_response_code()`, each
+  well-formed `Name: value` header a `header()` call, the rest is the body, streamed as it arrives;
+* stderr discarded. On any failure (binary missing, cannot start, no response) nothing from the
+  child is shown: `api.live.php` answers a generic JSON 500 and `index.live.php` a generic alert,
+  and the details go to cPanel's error log without paths.
+
+The binary is found at `$WEBPULSE_BIN`, else `/usr/local/webpulse/bin/webpulse`, else
+`bin/webpulse` next to the shim (the packaging tests use the first and last).
+
+The LiveAPI PHP runs **as the account user**, so the binary does too, and the OS permissions are the real
+boundary: it may only read `/var/webpulse/data/<user>/` (group-readable) and write
+`/var/webpulse/data/<user>/user/` (owned by the user). The binary additionally refuses
+`--principal user:X` when its effective uid is neither root nor X's. `uapi()` return shapes
 differ slightly between versions (array vs object); `LiveApiUser::resolve()`
-must accept both and fall back to `getenv('REMOTE_USER')`, then to
-`posix_getpwuid(posix_geteuid())['name']`.
+accepts both and falls back to `getenv('REMOTE_USER')`, then to
+`posix_getpwuid(posix_geteuid())['name']`. The shim needs `proc_open` to be allowed in cPanel's PHP
+(`disable_functions`) — to be confirmed on a real server.
 
 ## WHM plugin (administrator)
 
 ```
-/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/index.cgi    #!/usr/local/cpanel/3rdparty/bin/php
-/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/api.cgi
+/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/index.cgi    #!/bin/bash shim
+/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/api.cgi      #!/bin/bash shim
 /usr/local/cpanel/whostmgr/docroot/addon_plugins/webpulse.png  48×48 transparent PNG
 /var/cpanel/apps/webpulse.conf
 ```
-`index.cgi` header lines (PHP `#` comments right after `<?php`, which follows the
-shebang on line 1; placed outside `<?php` they would be printed):
-```
+`index.cgi` keeps the WHM header comments right after the shebang:
+```bash
+#!/bin/bash
 #WHMADDON:webpulse:WebPulse Analytics:webpulse.png
 #ACLS:all
+exec /usr/local/webpulse/bin/webpulse cgi --whm --page --api-url api.cgi
 ```
+`api.cgi` is the same with `exec … cgi --whm --api`. Both locate the binary through `$WEBPULSE_BIN`,
+`/usr/local/webpulse/bin/webpulse`, then `bin/webpulse` next to the script, and print a generic
+500 (HTML or JSON) when none exists. cpsrvd's CGI environment (`REMOTE_USER`, `REQUEST_METHOD`,
+`QUERY_STRING`, `CONTENT_TYPE`, `CONTENT_LENGTH`, `HTTP_X_WEBPULSE_REQUEST`, `REMOTE_ADDR`) and the
+request body on stdin are inherited by `exec`.
 The AppConfig `acls=all,list-accts` is what actually gates access in modern WHM;
 the `#ACLS` comment is the legacy marker. Whether a reseller with only
 `list-accts` sees the menu entry must be confirmed on a real server.
@@ -116,9 +146,11 @@ runs `/scripts/restartsrv_cpsrvd` only if registration reports it is needed):
 /usr/local/cpanel/bin/register_appconfig   /usr/local/webpulse/whm/webpulse.conf
 /usr/local/cpanel/bin/unregister_appconfig webpulse
 ```
-The CGI runs as root. It prints `Content-Type: text/html\r\n\r\n` then the
-SPA; WHM shows it inside its own frame so no WHM master template is needed.
-Caller identity: `getenv('REMOTE_USER')`; `root` → admin principal; otherwise
+The CGI runs as root and `webpulse cgi --whm` refuses to run when its euid is not 0. It prints
+`Content-Type: text/html\r\n\r\n` then the SPA; WHM shows it inside its own frame so no WHM
+master template is needed. Mutating API actions need `POST` and `X-WebPulse-Request: 1` (the binary
+answers 405 otherwise).
+Caller identity: `REMOTE_USER`; `root` → admin principal; otherwise
 the user is a reseller → `reseller` principal whose visible accounts are those
 with `OWNER=<reseller>` in `/var/cpanel/users/<account>` (root is also the
 owner of its own accounts). A reseller that owns no account, or any other
@@ -145,8 +177,10 @@ whole stats cycle starts. Both hooks are registered:
 Hook scripts must answer `--describe` with a JSON array describing
 themselves (category/event/stage/hook/exectype) and read the JSON payload on
 STDIN (`{"context":{…},"data":{"user":"…", …}}`). `stats_runuser_pre.sh`
-reads `data.user`, validates `^[a-z0-9_][a-z0-9_-]{0,31}$`, and touches the
-flag. Both scripts exit 0 always (never block stats).
+extracts `data.user` with plain bash (no PHP, no binary, no `jq`: it runs as the
+account), validates `^[a-z0-9_][a-z0-9_-]{0,31}$`, and touches the flag.
+`stats_runall_pre.sh` runs `/usr/local/webpulse/bin/webpulse collect --quiet` with a
+20 minute timeout. Both scripts exit 0 always (never block stats).
 
 ## Cron — `/etc/cron.d/webpulse`
 ```
@@ -158,8 +192,10 @@ flag. Both scripts exit 0 always (never block stats).
 
 ## Installer checks
 `install.sh` refuses to run when not root, when `/usr/local/cpanel/cpanel` is
-missing (unless `--standalone`, which installs only CLI + dev server), when
-no PHP ≥ 8.1 with `pdo_sqlite` is found (tries
-`/usr/local/cpanel/3rdparty/bin/php`, then `php` in PATH), and prints the
-exact command that failed when any cPanel registration step fails, leaving
-the system consistent (it uninstalls what it registered).
+missing (unless `--standalone`, which installs only CLI + dev server), when no
+binary can be obtained (see `docs/INSTALL.md`: release download with sha256
+verification, `--build`, `--binary`) or when the binary does not run on the
+machine. It looks for cPanel's PHP (`/usr/local/cpanel/3rdparty/bin/php`, then
+`php` in PATH) only to warn that the cPanel page needs it. It prints the exact
+command that failed when any cPanel registration step fails, leaving the system
+consistent (it uninstalls what it registered).

@@ -2,33 +2,85 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, rust]
   pull_request:
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  test:
-    name: PHP ${{ matrix.php }}
+  lint:
+    name: fmt + clippy
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        php: ['8.1', '8.3']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: cargo test + packaging tests
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # PHP is only the runner of the packaging tests (installer, shims, hooks) and of the parity harness
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ matrix.php }}
+          php-version: '8.3'
           extensions: pdo_sqlite, sqlite3, json, mbstring, zlib, posix
           coverage: none
           ini-values: memory_limit=512M
 
-      - name: Test suite
-        run: make test
+      - name: System tools
+        run: sudo apt-get install -y --no-install-recommends sqlite3 jq shellcheck
+
+      - name: cargo test
+        run: cargo test --release
+
+      - name: Packaging tests (installer, shims, hooks)
+        run: php tests/run.php pkg_
+
+  parity:
+    name: parity with the 0.1.0 PHP engine
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the harness checks out tag v0.1.0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_sqlite, sqlite3, json, mbstring, zlib, posix
+          coverage: none
+          ini-values: memory_limit=1G
+      - name: System tools
+        run: sudo apt-get install -y --no-install-recommends sqlite3 jq
+      - name: Build
+        run: cargo build --release
+      - name: Parity harness
+        run: |
+          if [ -x tests/parity/run.sh ]; then
+            tests/parity/run.sh
+          else
+            echo "tests/parity/run.sh is not present yet, nothing to compare"
+          fi
 
   shellcheck:
     name: shellcheck
@@ -38,4 +90,4 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck -S warning install.sh uninstall.sh installer/lib.sh hooks/*.sh scripts/*.sh
+          shellcheck -S warning install.sh uninstall.sh installer/lib.sh hooks/*.sh scripts/*.sh whm/cgi/*.cgi

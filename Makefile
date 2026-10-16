@@ -1,52 +1,82 @@
-# WebPulse — developer tasks (no cPanel needed). See docs/DEVELOPMENT.md.
+# WebPulse - developer tasks (no cPanel needed). See docs/DEVELOPMENT.md.
+#
+#   make build            cargo build --release            -> target/release/webpulse
+#   make test             cargo tests + PHP packaging tests + parity harness (when php exists)
+#   make lint             cargo fmt --check, clippy, shellcheck, php -l of the shims
+#   make fixtures         fake cPanel server with generated logs in tests/tmp/dev
+#   make serve            dev dashboard for the account "alice" on http://127.0.0.1:$(PORT)
+#   make serve-admin      dev dashboard as server administrator
+#   make dist             source tarball dist/webpulse-<version>.tar.gz   (git archive)
+#   make release          binary tarball dist/webpulse-<version>-<target>.tar.gz (+ .sha256)
 
+CARGO   ?= cargo
 PHP     ?= php
 PORT    ?= 8099
+TARGET  ?=
 VERSION := $(shell cat VERSION)
-DEVCFG  := tests/tmp/dev/config.json
-GEOIP_FIXTURE := tests/fixtures/geoip/dbip-country-lite.mmdb
+BIN     := target/release/webpulse
+DEVDIR  := tests/tmp/dev
+DEVCFG  := $(DEVDIR)/config.json
 
-PHP_FILES = $(shell find bin lib tests cpanel whm hooks installer scripts -type f \( -name '*.php' -o -name '*.cgi' -o -name 'webpulse' \) 2>/dev/null | grep -v '^tests/tmp/')
-JS_FILES  = $(shell find ui -type f -name '*.js' 2>/dev/null)
+SHELL_FILES = install.sh uninstall.sh installer/lib.sh hooks/*.sh scripts/*.sh whm/cgi/*.cgi
+PHP_SHIMS   = cpanel/webpulse/index.live.php cpanel/webpulse/api.live.php cpanel/webpulse/lib/*.php
 
-.PHONY: test lint fixtures serve serve-admin dist geoip-fixture clean
+.PHONY: build test test-rust test-pkg test-parity lint fmt fixtures serve serve-admin dist release geoip-fixture clean
 
-test: lint
-	$(PHP) tests/run.php
+build:
+	$(CARGO) build --release
+
+test: test-rust test-pkg test-parity
+
+test-rust:
+	$(CARGO) test --release
+
+# packaging tests (installer, shims, hooks, static checks): PHP is only the test runner
+test-pkg:
+	@if command -v $(PHP) >/dev/null 2>&1; then $(PHP) tests/run.php pkg_; \
+	else echo "php not found: skipping the packaging tests (tests/run.php pkg_)"; fi
+
+# Rust vs 0.1.0 PHP engine; needs php >= 8.1 and the legacy checkout the script prepares
+test-parity: build
+	@if [ -x tests/parity/run.sh ] && command -v $(PHP) >/dev/null 2>&1; then tests/parity/run.sh; \
+	else echo "skipping the parity harness (needs php and tests/parity/run.sh)"; fi
+
+fmt:
+	$(CARGO) fmt
 
 lint:
-	@fail=0; for f in $(PHP_FILES); do \
-		if head -c 200 "$$f" | grep -q '<?php\|#!/usr/bin/env php\|bin/php'; then \
-			out=$$($(PHP) -l "$$f" 2>&1) || { echo "$$out"; fail=1; }; \
-		fi; \
-	done; \
-	if command -v node >/dev/null 2>&1; then \
-		for f in $(JS_FILES); do node --check "$$f" || fail=1; done; \
-	fi; \
-	if [ $$fail -ne 0 ]; then echo "lint failed"; exit 1; fi; \
-	echo "lint ok"
+	$(CARGO) fmt --check
+	$(CARGO) clippy --all-targets -- -D warnings
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck -S warning $(SHELL_FILES); \
+	else echo "shellcheck not found: skipped"; fi
+	@if command -v $(PHP) >/dev/null 2>&1; then for f in $(PHP_SHIMS); do $(PHP) -l "$$f" >/dev/null || exit 1; done; fi
+	@echo "lint ok"
 
-fixtures:
-	$(PHP) tests/support/devenv.php dev
+fixtures: build
+	WEBPULSE_BIN=$(BIN) scripts/devenv.sh dev
 
-$(DEVCFG):
-	$(PHP) tests/support/devenv.php dev
+$(DEVCFG): $(BIN)
+	WEBPULSE_BIN=$(BIN) scripts/devenv.sh dev
 
-# serve / serve-admin print http://127.0.0.1:$(PORT)/?token=… — open that URL (the token is required)
+$(BIN):
+	$(CARGO) build --release
+
+# serve / serve-admin print http://127.0.0.1:$(PORT)/?token=... - open that URL (the token is required)
 serve: $(DEVCFG)
-	WEBPULSE_CONFIG=$(DEVCFG) $(PHP) bin/webpulse serve --port $(PORT) --user alice
+	WEBPULSE_CONFIG=$(DEVCFG) $(BIN) serve --port $(PORT) --user alice
 
 serve-admin: $(DEVCFG)
-	WEBPULSE_CONFIG=$(DEVCFG) $(PHP) bin/webpulse serve --port $(PORT) --admin
+	WEBPULSE_CONFIG=$(DEVCFG) $(BIN) serve --port $(PORT) --admin
 
 geoip-fixture:
-	$(PHP) tests/support/geoip_fixture.php
+	scripts/geoip_fixture.sh
 
 dist:
-	@if [ -x scripts/build_dist.sh ]; then scripts/build_dist.sh; else \
-		mkdir -p dist && tar --exclude='./tests/tmp' --exclude='./dist' --exclude='./.git' \
-			--transform 's,^\.,webpulse-$(VERSION),' -czf dist/webpulse-$(VERSION).tar.gz . && \
-		echo "dist/webpulse-$(VERSION).tar.gz"; fi
+	scripts/build_dist.sh
+
+# TARGET=x86_64-unknown-linux-musl (default: host arch, musl); ZIG=1 uses cargo-zigbuild
+release:
+	scripts/build_release.sh $(if $(TARGET),--target $(TARGET)) $(if $(ZIG),--zigbuild)
 
 clean:
 	rm -rf tests/tmp dist

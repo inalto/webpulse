@@ -1,11 +1,28 @@
-//! `webpulse hooked` — stub, implemented by the owning work package.
+//! `webpulse hooked` — alias of `webpulse collect --hooked` (`HookedCommand`).
 
-use crate::app::App;
-use crate::error::Result;
+use anyhow::Result;
 
-#[derive(Debug, clap::Args)]
-pub struct Args {}
+use super::{Ctx, Kind, RawArgs};
 
-pub fn run(_app: &App, _args: &Args) -> Result<i32> {
-    anyhow::bail!("'hooked' is not implemented yet")
+/// One-line description.
+pub const SUMMARY: &str =
+    "drain the accounts flagged by the Stats::RunUser hook (= collect --hooked)";
+
+/// `--help` text.
+pub const USAGE: &str = "Usage: webpulse hooked [--job [ID]]\n\nSame as: webpulse collect --hooked";
+
+/// Options.
+pub const SPEC: &[(&str, Kind)] = &[("job", Kind::Optional)];
+
+/// Arguments (clap description).
+#[derive(Debug, Default, clap::Args)]
+pub struct Args {
+    /// Record the run in registry.jobs (adopt job ID when given)
+    #[arg(long)]
+    pub job: Option<Option<String>>,
+}
+
+/// Entry point from the dispatcher.
+pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
+    super::collect::hooked(ctx, raw)
 }

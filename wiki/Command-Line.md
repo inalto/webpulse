@@ -87,7 +87,7 @@ webpulse rollup [--user USER [--domain DOMAIN]] [--job [ID]]
 
 ### status
 
-Collection health: version, PHP, config path, the main paths, registry, accounts and domains, last
+Collection health: version, config path, the main paths, registry, accounts and domains, last
 collection and the lag of the newest log line, cron, pending hook flags, GeoIP and the last jobs.
 
 ```bash

@@ -5,12 +5,13 @@ Apache or Nginx already write for every domain and turns them into a dashboard: 
 where visitors come from, which pages they read, which links are broken, how much traffic is bots.
 
 There is nothing to add to your customers' websites. No JavaScript tracker, no cookie, no external
-service. Everything runs on the PHP and SQLite that ship with cPanel.
+service. Since 0.2.0 WebPulse is a **single static Rust binary** with SQLite built in: nothing else has to
+be installed on the server.
 
 ![The WebPulse overview](https://raw.githubusercontent.com/inalto/webpulse/main/docs/screenshots/overview-1280-light.png)
 
-> **Project status.** Version 0.1.0 is not released yet. WebPulse was developed without access to a
-> real cPanel server. The engine, API and dashboard are covered by automated tests that run against a
+> **Project status.** Version 0.2.0 (a rewrite of the 0.1.0 PHP code in Rust, same data and same
+> dashboard) is not released yet. WebPulse was developed without access to a real cPanel server. The engine, API and dashboard are covered by automated tests that run against a
 > fake server root; the cPanel-specific registration steps follow the cPanel developer documentation
 > but must be verified on a real server. Test on a non-production machine first.
 
@@ -55,7 +56,7 @@ what the installer does.
 
 **Getting started**
 
-- [[Installation]] - requirements, the one-line installer, flags, first collection
+- [[Installation]] - requirements, the one-line installer, flags, air-gapped and source builds, first collection
 - [[Updating and Uninstalling]] - update in place, roll back, remove
 - [[Manual Installation]] - every command the installer runs
 - [[Troubleshooting and FAQ]] - no data, missing icons, permission errors
@@ -75,7 +76,7 @@ what the installer does.
 
 **Project**
 
-- [[Development]] - run the tests and the dashboard without cPanel
+- [[Development]] - build with cargo, run the tests and the dashboard without cPanel, cut a release
 - [[Roadmap]] - ideas that are not implemented
 - [Changelog](https://github.com/inalto/webpulse/blob/main/CHANGELOG.md) and
   [source code](https://github.com/inalto/webpulse)

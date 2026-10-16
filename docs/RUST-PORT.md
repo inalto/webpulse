@@ -160,4 +160,49 @@ Version 0.2.0.
 
 ## Intentional differences from 0.1.0
 
-(none yet)
+Engine and CLI (R1). The database parity harness (`tests/parity/db.sh`) finds
+the domain databases and the registry identical row for row; the items below
+are outside what it compares or are deliberate.
+
+* **Planner statistics.** The bundled SQLite is built with `SQLITE_ENABLE_STAT4`,
+  so `PRAGMA optimize` during `rollup` may create `sqlite_stat4` next to
+  `sqlite_stat1`. Only the query planner reads it; 0.1.0 opens such files
+  normally. The harness leaves `sqlite_stat*` out of the comparison.
+* **Database file sizes.** Page allocation differs between the two SQLite
+  builds, so `domain_summary.db_bytes`, `status.data_bytes` and the file sizes
+  can differ by a few pages. The contents are identical.
+* **Server timezone.** `timezone: null` now means the system timezone (`TZ`,
+  then `/etc/localtime`) instead of PHP's `date.timezone` setting (UTC when
+  unset). The same applies to the local times printed by `status`,
+  `accounts list` and `domains list`, and to log timestamps. Set `timezone` in
+  `config.json` to get the old result.
+* **`status`.** `php` is `null` in `--json`, and the first text line is
+  `WebPulse <version> (Rust)`.
+* **`--help`.** The command list also shows `cgi`. `dev` (the log generator
+  that replaces `tests/gen_logs.php`) is hidden.
+* **`php_bin`.** The key is ignored. A warning is logged once, and a
+  `<run_dir>/.php_bin_warned` marker records that it was logged.
+* **Child processes of the global collect.** The binary runs itself
+  (`current_exe() collect --user U --child --json`). Tests can point
+  `WEBPULSE_CHILD_EXE` at a wrapper instead of setting `php_bin`.
+* **Timing and memory fields.** `elapsed`, `lines_per_sec` and `peak_memory`
+  are measured differently. `peak_memory` is the peak RSS of the process
+  (`VmHWM`), where 0.1.0 reported PHP's `memory_get_peak_usage(true)`.
+* **Log line context.** Error lines no longer carry the PHP `{"at":"file:line"}`
+  context.
+* **Generator archives.** `webpulse dev gen-logs` writes byte-identical plain
+  logs and summaries. Its `.gz` archives decompress to the same bytes, but the
+  compressed bytes differ because a different deflate implementation writes them.
+* **Gzip edge cases.** An archive whose last member is cut short after a
+  valid header gives up the lines inflated so far without an error, as zlib's
+  streaming `inflate_add` did. Lines longer than 2 MiB inside archives are cut
+  after reading 1 MiB output chunks, not 0.1.0's 4 MiB batches, so the boundary
+  at which such a line is cut can differ.
+* **GeoIP reader.** Lookups use the `maxminddb` crate in place of the PHP MMDB
+  reader. The crate has its own decoding budgets: hostile files still fail
+  fast, with the crate's error messages. A record with a field of an
+  unexpected type yields no country, where 0.1.0 tried the next field.
+* **Timezone identifiers.** A timezone is accepted when it is an IANA zone of
+  the continent groups that `DateTimeZone::listIdentifiers()` returns, or
+  `UTC`. A few backward-compatible aliases inside those groups (for example
+  `Asia/Calcutta`) are accepted, though PHP rejected them.

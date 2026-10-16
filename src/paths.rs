@@ -1,10 +1,14 @@
-//! Filesystem layout (see docs/ARCHITECTURE.md "Paths") and strict name validation.
+//! Filesystem layout (see docs/ARCHITECTURE.md "Paths") and strict name validation
+//! (`WebPulse\Paths`). User and domain names are validated before they are turned
+//! into paths, so no traversal is possible.
 
 use std::path::{Path, PathBuf};
 
+use anyhow::{Result, anyhow};
+
 use crate::config::Config;
 
-/// Account names: cPanel usernames (`^[a-z0-9_][a-z0-9_-]{0,31}\z`).
+/// Account names: cPanel usernames (`^[a-z0-9_][a-z0-9_-]{0,31}\z`, no `..`).
 pub fn is_valid_user(u: &str) -> bool {
     let b = u.as_bytes();
     if b.is_empty() || b.len() > 32 || u.contains("..") {
@@ -17,14 +21,49 @@ pub fn is_valid_user(u: &str) -> bool {
             .all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
 }
 
-/// Domain names as they appear in file names (`^[a-z0-9.-]{1,253}\z`, no `..`, no leading `.`/`-`).
+/// Lowercase domain names as they appear in file names:
+/// `^(?=.{1,253}\z)[a-z0-9_][a-z0-9_-]{0,62}(\.[a-z0-9_][a-z0-9_-]{0,62})*\z`.
 pub fn is_valid_domain(d: &str) -> bool {
-    let b = d.as_bytes();
-    if b.is_empty() || b.len() > 253 || d.contains("..") || b[0] == b'.' || b[0] == b'-' {
+    if d.is_empty() || d.len() > 253 {
         return false;
     }
-    b.iter()
-        .all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'.' || c == b'-')
+    d.split('.').all(|label| {
+        let b = label.as_bytes();
+        !b.is_empty()
+            && b.len() <= 63
+            && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit() || b[0] == b'_')
+            && b[1..]
+                .iter()
+                .all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
+    })
+}
+
+/// `Paths::assertUser`: the name, or the 0.1.0 error `invalid user name: "x"`.
+pub fn assert_user(user: &str) -> Result<&str> {
+    if is_valid_user(user) {
+        Ok(user)
+    } else {
+        Err(anyhow!(
+            "invalid user name: {}",
+            crate::util::json::encode_php_default(&serde_json::Value::from(user))
+        ))
+    }
+}
+
+/// `Paths::assertDomain`: the name, or the 0.1.0 error `invalid domain name: "x"`.
+pub fn assert_domain(domain: &str) -> Result<&str> {
+    if is_valid_domain(domain) {
+        Ok(domain)
+    } else {
+        Err(anyhow!(
+            "invalid domain name: {}",
+            crate::util::json::encode_php_default(&serde_json::Value::from(domain))
+        ))
+    }
+}
+
+fn rtrim_slash(s: &str) -> String {
+    s.trim_end_matches('/').to_string()
 }
 
 /// All configured paths, resolved once from the configuration.
@@ -47,73 +86,172 @@ pub struct Paths {
 
 impl Paths {
     /// Builds the layout from `config.paths.*`; `root` is the installation directory
-    /// (directory containing `bin/`, `ui/`), used for nothing security-relevant.
+    /// (directory containing `bin/`, `etc/`), used for nothing security-relevant.
     pub fn from_config(cfg: &Config, root: PathBuf) -> Paths {
-        let p = |k: &str, d: &str| PathBuf::from(cfg.get_str(&format!("paths.{k}")).unwrap_or_else(|| d.to_string()));
-        let data_dir = p("data_dir", "/var/webpulse/data");
+        let s = |k: &str| match cfg.get(&format!("paths.{k}")) {
+            serde_json::Value::String(v) => v.clone(),
+            serde_json::Value::Null => String::new(),
+            other => other.to_string(),
+        };
+        let dir = |k: &str| PathBuf::from(rtrim_slash(&s(k)));
+        let geoip_dir = match cfg.get("geoip.country_db").as_str() {
+            Some(db) => Path::new(db)
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(".")),
+            None => PathBuf::from("."),
+        };
         Paths {
             root,
-            registry_db: p("registry_db", "/var/webpulse/webpulse.db"),
-            log_dir: p("log_dir", "/var/webpulse/log"),
-            run_dir: p("run_dir", "/var/webpulse/run"),
+            data_dir: dir("data_dir"),
+            registry_db: PathBuf::from(s("registry_db")),
+            log_dir: dir("log_dir"),
+            run_dir: dir("run_dir"),
             domlogs_dirs: cfg
-                .get_array("paths.domlogs_dirs")
-                .into_iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect(),
-            archive_dir: cfg.get_str("paths.archive_dir").unwrap_or_else(|| "/home/{user}/logs".into()),
-            userdomains_file: p("userdomains_file", "/etc/userdomains"),
-            cpanel_users_dir: p("cpanel_users_dir", "/var/cpanel/users"),
-            cpanel_userdata_dir: p("cpanel_userdata_dir", "/var/cpanel/userdata"),
-            home_root: p("home_root", "/home"),
-            cron_file: p("cron_file", "/etc/cron.d/webpulse"),
-            geoip_dir: cfg
-                .get_str("geoip.country_db")
-                .map(|s| PathBuf::from(s).parent().map(Path::to_path_buf).unwrap_or_else(|| "/var/webpulse/geoip".into()))
-                .unwrap_or_else(|| "/var/webpulse/geoip".into()),
-            data_dir,
+                .get("paths.domlogs_dirs")
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .filter(|d| !d.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            archive_dir: s("archive_dir"),
+            userdomains_file: PathBuf::from(s("userdomains_file")),
+            cpanel_users_dir: dir("cpanel_users_dir"),
+            cpanel_userdata_dir: dir("cpanel_userdata_dir"),
+            home_root: dir("home_root"),
+            cron_file: PathBuf::from(s("cron_file")),
+            geoip_dir,
         }
     }
 
-    pub fn root(&self) -> &Path { &self.root }
-    pub fn data_dir(&self) -> &Path { &self.data_dir }
-    pub fn registry_db(&self) -> &Path { &self.registry_db }
-    pub fn log_dir(&self) -> &Path { &self.log_dir }
-    pub fn run_dir(&self) -> &Path { &self.run_dir }
-    pub fn hook_dir(&self) -> PathBuf { self.run_dir.join("hook") }
-    pub fn geoip_dir(&self) -> &Path { &self.geoip_dir }
-    pub fn userdomains_file(&self) -> &Path { &self.userdomains_file }
-    pub fn cpanel_users_dir(&self) -> &Path { &self.cpanel_users_dir }
-    pub fn cpanel_userdata_dir(&self) -> &Path { &self.cpanel_userdata_dir }
-    pub fn home_root(&self) -> &Path { &self.home_root }
-    pub fn cron_file(&self) -> &Path { &self.cron_file }
+    /// Install directory (contains `bin/`, `etc/`).
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    /// Directory holding one sub-directory per account (`paths.data_dir`).
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+    /// Registry database file (`paths.registry_db`).
+    pub fn registry_db(&self) -> &Path {
+        &self.registry_db
+    }
+    /// Directory of webpulse.log (`paths.log_dir`).
+    pub fn log_dir(&self) -> &Path {
+        &self.log_dir
+    }
+    /// Directory of lock files and hook flags (`paths.run_dir`).
+    pub fn run_dir(&self) -> &Path {
+        &self.run_dir
+    }
+    /// `<run_dir>/hook` — flag files written by the Stats::RunUser hook (1777).
+    pub fn hook_dir(&self) -> PathBuf {
+        self.run_dir.join("hook")
+    }
+    /// Directory holding GeoIP databases (dirname of `geoip.country_db`).
+    pub fn geoip_dir(&self) -> &Path {
+        &self.geoip_dir
+    }
+    /// `/etc/userdomains` (`paths.userdomains_file`).
+    pub fn userdomains_file(&self) -> &Path {
+        &self.userdomains_file
+    }
+    /// `/var/cpanel/users` (`paths.cpanel_users_dir`).
+    pub fn cpanel_users_dir(&self) -> &Path {
+        &self.cpanel_users_dir
+    }
+    /// `/var/cpanel/userdata` (`paths.cpanel_userdata_dir`).
+    pub fn cpanel_userdata_dir(&self) -> &Path {
+        &self.cpanel_userdata_dir
+    }
+    /// Parent of the account home directories (`paths.home_root`).
+    pub fn home_root(&self) -> &Path {
+        &self.home_root
+    }
+    /// Cron file whose presence `status` reports (`paths.cron_file`).
+    pub fn cron_file(&self) -> &Path {
+        &self.cron_file
+    }
 
-    /// `<data_dir>/<user>`; panics on an invalid name — callers validate first.
+    /// `<data_dir>/<user>`; panics on an invalid name — callers validate first
+    /// (see [`Paths::try_user_dir`]).
     pub fn user_dir(&self, user: &str) -> PathBuf {
         assert!(is_valid_user(user), "invalid user name");
         self.data_dir.join(user)
     }
+    /// `<data_dir>/<user>`, or the `invalid user name` error.
+    pub fn try_user_dir(&self, user: &str) -> Result<PathBuf> {
+        Ok(self.data_dir.join(assert_user(user)?))
+    }
     /// `<data_dir>/<user>/user` — owned by the account, holds settings.json.
-    pub fn user_private_dir(&self, user: &str) -> PathBuf { self.user_dir(user).join("user") }
-    pub fn user_settings_file(&self, user: &str) -> PathBuf { self.user_private_dir(user).join("settings.json") }
-    /// `<data_dir>/<user>/<domain>.db`; panics on invalid names — callers validate first.
+    pub fn user_private_dir(&self, user: &str) -> PathBuf {
+        self.user_dir(user).join("user")
+    }
+    /// `<data_dir>/<user>/user/settings.json`.
+    pub fn user_settings_file(&self, user: &str) -> PathBuf {
+        self.user_private_dir(user).join("settings.json")
+    }
+    /// `<data_dir>/<user>/<domain>.db`; panics on invalid names — callers validate
+    /// first (see [`Paths::try_domain_db`]).
     pub fn domain_db(&self, user: &str, domain: &str) -> PathBuf {
         assert!(is_valid_domain(domain), "invalid domain name");
         self.user_dir(user).join(format!("{domain}.db"))
     }
-    /// Domlog directories with `{user}` substituted; the second element says whether the
-    /// directory is per-user (contained `{user}`) or shared.
+    /// `<data_dir>/<user>/<domain>.db`, or the `invalid … name` error.
+    pub fn try_domain_db(&self, user: &str, domain: &str) -> Result<PathBuf> {
+        let dir = self.try_user_dir(user)?;
+        Ok(dir.join(format!("{}.db", assert_domain(domain)?)))
+    }
+    /// Domlog directories with `{user}` substituted; the second element says whether
+    /// the directory is per-user (its template contained `{user}`).
     pub fn domlogs_dirs(&self, user: &str) -> Vec<(PathBuf, bool)> {
         self.domlogs_dirs
             .iter()
-            .map(|d| (PathBuf::from(d.replace("{user}", user)), d.contains("{user}")))
+            .map(|d| {
+                (
+                    PathBuf::from(rtrim_slash(&d.replace("{user}", user))),
+                    d.contains("{user}"),
+                )
+            })
             .collect()
+    }
+    /// `Paths::domlogsDirMap`: distinct directories (first occurrence order) with
+    /// `true` when the directory is shared by every account (no `{user}` in any of
+    /// the templates that produced it).
+    pub fn domlogs_dir_map(&self, user: &str) -> Vec<(PathBuf, bool)> {
+        let mut out: Vec<(PathBuf, bool)> = Vec::new();
+        for d in &self.domlogs_dirs {
+            let dir = PathBuf::from(rtrim_slash(&d.replace("{user}", user)));
+            let shared = !d.contains("{user}");
+            match out.iter_mut().find(|(p, _)| *p == dir) {
+                Some(e) => e.1 = e.1 && shared,
+                None => out.push((dir, shared)),
+            }
+        }
+        out
+    }
+    /// The raw `paths.domlogs_dirs` templates.
+    pub fn domlogs_templates(&self) -> &[String] {
+        &self.domlogs_dirs
     }
     /// Archive directory for a user and whether it is shared (no `{user}` placeholder).
     pub fn archive_dir(&self, user: &str) -> (PathBuf, bool) {
-        (PathBuf::from(self.archive_dir.replace("{user}", user)), !self.archive_dir.contains("{user}"))
+        (
+            PathBuf::from(rtrim_slash(&self.archive_dir.replace("{user}", user))),
+            !self.archive_dir.contains("{user}"),
+        )
     }
-    pub fn lock_path(&self, name: &str) -> PathBuf { self.run_dir.join(format!("{name}.lock")) }
+    /// True when the archive directory template has no `{user}` placeholder.
+    pub fn archive_dir_shared(&self) -> bool {
+        !self.archive_dir.contains("{user}")
+    }
+    /// `<run_dir>/<name>.lock`.
+    pub fn lock_path(&self, name: &str) -> PathBuf {
+        self.run_dir.join(format!("{name}.lock"))
+    }
 }
 
 #[cfg(test)]
@@ -121,16 +259,50 @@ mod tests {
     use super::*;
     #[test]
     fn names() {
-        assert!(is_valid_user("alice"));
-        assert!(is_valid_user("_a1-b"));
-        assert!(!is_valid_user("Alice"));
-        assert!(!is_valid_user("a.b"));
-        assert!(!is_valid_user("alice\n"));
-        assert!(!is_valid_user(""));
-        assert!(is_valid_domain("shop.example.com"));
-        assert!(!is_valid_domain("../x"));
-        assert!(!is_valid_domain(".x"));
-        assert!(!is_valid_domain("Example.com"));
-        assert!(!is_valid_domain("a/b"));
+        for u in ["alice", "a1", "user_name", "r-1", "_a1-b"] {
+            assert!(is_valid_user(u), "{u}");
+        }
+        for u in [
+            "",
+            "..",
+            "a/b",
+            "Alice",
+            "a.b",
+            &"a".repeat(40),
+            "a\0",
+            "alice\n",
+        ] {
+            assert!(!is_valid_user(u), "{u:?}");
+        }
+        for d in [
+            "example.com",
+            "shop.example.com",
+            "xn--bcher-kva.example",
+            "a-b.co.uk",
+            "localhost",
+            "a_b.com",
+            "a-.com",
+        ] {
+            assert!(is_valid_domain(d), "{d}");
+        }
+        for d in [
+            "",
+            "..",
+            "../x",
+            "a/b",
+            "Example.com",
+            "-a.com",
+            "a..b",
+            "a.com/",
+            "*.example.com",
+            ".x",
+            "a.com.",
+        ] {
+            assert!(!is_valid_domain(d), "{d}");
+        }
+        assert_eq!(
+            assert_user("../x").unwrap_err().to_string(),
+            "invalid user name: \"..\\/x\""
+        );
     }
 }
