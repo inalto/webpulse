@@ -1,0 +1,7 @@
+---
+addon_domains: {}
+cp_php_magic_include_path.conf: 0
+main_domain: example.com
+parked_domains: []
+sub_domains:
+  - shop.example.com

@@ -43,8 +43,12 @@ curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | b
 | `--ref <branch\|tag>`      | install a specific git ref (`WEBPULSE_REF`)               |
 | `--repo <owner/name>`      | install from a fork (`WEBPULSE_REPO`)                     |
 | `--no-cron`                | do not install `/etc/cron.d/webpulse`                     |
+| `--theme <name>`           | also install the cPanel plugin into another theme (repeatable) |
+| `--all-themes`             | install the cPanel plugin into every theme under `base/frontend/` |
+| `--standalone`             | no cPanel: install only the CLI and the dev dashboard     |
+| `-y`                       | skip the confirmation (implied when stdin is not a terminal) |
 | `--update`                 | update an existing installation in place                  |
-| `--uninstall`              | remove plugins, cron, hooks (data is kept unless `--purge`)|
+| `--uninstall`              | remove plugins, cron, hooks and code (data is kept unless `--purge`) |
 
 After installation open **WHM » Plugins » WebPulse Analytics** to review which
 accounts are enabled (all accounts are enabled by default) and run the first
@@ -61,7 +65,35 @@ webpulse accounts list|enable|disable|reset <user>
 webpulse domains  enable|disable <user> <domain>
 webpulse report --user U --domain D --range 30d
 webpulse serve --port 8099 --user U        # local dev dashboard (no cPanel needed)
+webpulse config get|set <key> [value]      # run-time settings (also editable in WHM)
+webpulse purge --user U [--domain D] --yes # delete statistics (irreversible)
 ```
+
+Every command accepts `--config <file>`, `--verbose`, `--quiet`, `--json` and `--help`.
+
+## How it works in one paragraph
+
+Every 5 minutes (and right before cPanel's own `cpanellogd` statistics run,
+through a `Stats::RunAll`/`Stats::RunUser` hook) the collector tails each
+enabled domain's `domlogs` from an inode/offset checkpoint, parses the
+*combined* log lines, classifies them (pageview, static asset, download,
+redirect, error, bot), groups human hits into 30-minute visits using a
+visitor hash salted per day (no IP is stored), and upserts daily aggregates
+plus a short-lived raw visits log into the domain's SQLite file. The
+dashboards only read those files. Measured throughput: ≈ 30 000 lines/s,
+26 MiB peak memory.
+
+## Screenshots
+
+![Overview](docs/screenshots/overview-1280-light.png)
+![WHM server view](docs/screenshots/server-1280-dark.png)
+
+## Requirements
+
+* cPanel & WHM 110 or later (Jupiter theme) on AlmaLinux / Rocky / CloudLinux / Ubuntu
+* PHP ≥ 8.1 with `pdo_sqlite` — the bundled `/usr/local/cpanel/3rdparty/bin/php` qualifies
+* Apache (EA4) or ea-nginx writing per-domain access logs in *combined* format
+
 
 ## Documentation
 

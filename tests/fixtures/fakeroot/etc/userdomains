@@ -1,0 +1,4 @@
+example.com: alice
+shop.example.com: alice
+blog.net: bob
+*: nobody

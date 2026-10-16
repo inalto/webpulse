@@ -117,7 +117,8 @@ SPA; WHM shows it inside its own frame so no WHM master template is needed.
 Caller identity: `getenv('REMOTE_USER')`; `root` → admin principal; otherwise
 the user is a reseller → `reseller` principal whose visible accounts are those
 with `OWNER=<reseller>` in `/var/cpanel/users/<account>` (root is also the
-owner of its own accounts). Anything else → 403.
+owner of its own accounts). A reseller that owns no account, or any other
+REMOTE_USER value, gets 403.
 
 ## Standardized hook — drain logs before stats
 

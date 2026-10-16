@@ -1,0 +1,122 @@
+/* WebPulse UI strings (English). Every user-visible string goes through t(). */
+(function () {
+  'use strict';
+
+  var S = {
+    'app.name': 'WebPulse',
+    'app.loading': 'Loading analytics…',
+    'range.today': 'Today', 'range.yesterday': 'Yesterday', 'range.7d': '7 days', 'range.30d': '30 days',
+    'range.90d': '90 days', 'range.12m': '12 months', 'range.month': 'This month', 'range.lastmonth': 'Last month',
+    'range.year': 'This year', 'range.all': 'All time', 'range.custom': 'Custom', 'range.label': 'Date range',
+    'range.from': 'From', 'range.to': 'To', 'range.apply': 'Apply', 'range.cancel': 'Cancel',
+    'range.invalid': 'Pick a start date on or before the end date.',
+    'compare.label': 'Compare', 'compare.hint': 'Compare with the previous period of the same length',
+    'theme.toggle': 'Switch light/dark theme',
+    'domain.label': 'Domain', 'domain.search': 'Search domains', 'domain.none': 'No matching domains',
+    'domain.nodata': 'no data yet',
+    'live.active': '{n} active visits', 'live.active1': '1 active visit', 'live.none': 'No visits in the last 30 minutes',
+    'live.collected': 'last collection {ago}', 'live.never': 'not collected yet', 'live.label': 'Live',
+    'live.pv': '{n} pageviews in the last 30 minutes',
+    'ago.now': 'just now', 'ago.min': '{n} min ago', 'ago.h': '{n} h ago', 'ago.d': '{n} days ago',
+    'tab.server': 'Server', 'tab.overview': 'Overview', 'tab.pages': 'Pages', 'tab.acquisition': 'Acquisition',
+    'tab.audience': 'Audience', 'tab.technical': 'Technical', 'tab.bots': 'Bots', 'tab.visits': 'Visits log',
+    'tab.settings': 'Settings',
+    'kpi.visits': 'Visits', 'kpi.visitors': 'Unique visitors', 'kpi.pageviews': 'Pageviews',
+    'kpi.pages_per_visit': 'Pages / visit', 'kpi.avg_duration': 'Avg. duration', 'kpi.bounce_rate': 'Bounce rate',
+    'kpi.bytes': 'Bandwidth', 'kpi.bot_share': 'Bot share',
+    'kpi.vs': 'vs previous period', 'kpi.noprev': 'no data in the previous period',
+    'metric.visits': 'Visits', 'metric.visitors': 'Visitors', 'metric.pageviews': 'Pageviews', 'metric.bytes': 'Bandwidth',
+    'metric.bot_hits': 'Bot hits', 'metric.errors': 'Errors', 'metric.errors_4xx': '4xx errors', 'metric.errors_5xx': '5xx errors',
+    'metric.hits': 'Hits', 'metric.human_hits': 'Human hits', 'metric.bounce_rate': 'Bounce rate', 'metric.avg_duration': 'Avg. duration',
+    'metric.pages_per_visit': 'Pages / visit', 'metric.bot_share': 'Bot share', 'metric.share': 'Share',
+    'metric.exit_rate': 'Exit rate', 'metric.entries': 'Entries', 'metric.exits': 'Exits', 'metric.bounces': 'Bounces',
+    'metric.last_seen': 'Last seen',
+    'chart.prev': '{name} (previous)', 'chart.metrics': 'Metrics shown in the chart',
+    'chart.granularity.hour': 'Hourly', 'chart.granularity.day': 'Daily', 'chart.granularity.week': 'Weekly', 'chart.granularity.month': 'Monthly',
+    'chart.weekend': 'Shaded columns are weekends.',
+    'card.when': 'When do people visit?', 'card.when.sub': 'Visits by weekday and hour, {tz}',
+    'card.hours.sub': 'Visits by hour of day, {tz}',
+    'card.top_pages': 'Top pages', 'card.channels': 'Channels', 'card.referrers': 'Top referrers',
+    'card.countries': 'Countries', 'card.devices': 'Devices', 'card.engagement': 'Engagement',
+    'card.engagement.duration': 'Visit duration', 'card.engagement.pages': 'Pages per visit',
+    'card.pages': 'Top pages', 'card.entry': 'Entry pages', 'card.exit': 'Exit pages', 'card.downloads': 'Downloads',
+    'card.channel_trend': 'Channels over time', 'card.ref_hosts': 'Referrer hosts', 'card.ref_urls': 'Referrer URLs',
+    'card.engines': 'Search engines', 'card.keywords': 'Keywords', 'card.campaigns': 'Campaigns',
+    'card.source_medium': 'Source / medium', 'card.cities': 'Cities', 'card.browsers': 'Browsers', 'card.os': 'Operating systems',
+    'card.device_types': 'Device types', 'card.status': 'HTTP status', 'card.errors_trend': 'Errors over time',
+    'card.not_found': 'Not found (404)', 'card.server_error': 'Server errors (5xx)', 'card.file_types': 'Bandwidth by file type',
+    'card.static': 'Heaviest static files', 'card.protocol': 'HTTP vs HTTPS', 'card.http_version': 'HTTP versions',
+    'card.methods': 'Methods', 'card.peak': 'Peak hour', 'card.bot_trend': 'Bot traffic over time', 'card.crawlers': 'Top crawlers',
+    'card.versions': '{name} versions',
+    'keywords.note': 'Most search engines hide the search terms; only engines that still send them appear here.',
+    'search.placeholder': 'Filter pages…', 'search.label': 'Filter all tables on this tab',
+    'table.key': 'Name', 'table.more': 'Show more', 'table.empty': 'Nothing recorded in this period.',
+    'table.export': 'Export CSV', 'table.export.title': 'Download this table as CSV',
+    'table.details': 'Details', 'table.referrers': 'Linked from', 'table.noreferrers': 'No external referrer recorded (typed, bookmarked or bots).',
+    'other': 'Other', 'unknown': 'Unknown', 'direct': '(direct)',
+    'geo.missing': 'No GeoIP database is installed, so countries are unknown. Ask your administrator to enable GeoIP in WHM » WebPulse » Settings.',
+    'cities.missing': 'City-level data needs a GeoIP city database, which is not installed.',
+    'ai.badge': 'AI', 'ai.note': 'AI crawlers (GPTBot, ClaudeBot, CCBot, Bytespider, Amazonbot…) are highlighted.',
+    'peak.at': '{hits} hits on {day} at {hour}', 'peak.hour': 'Busiest hour of the day: {hour}',
+    'visits.load_more': 'Load more visits', 'visits.empty': 'No visits recorded in this period.',
+    'visits.live': 'Active now', 'visits.pages': '{n} pages', 'visits.page': '1 page', 'visits.actions': 'Actions',
+    'visits.retention': 'Individual visits are kept for {n} days; older periods only have aggregated reports.',
+    'visits.entry': 'Entry', 'visits.exit': 'Exit', 'visits.end': 'End of list.',
+    'type.pageview': 'Page', 'type.download': 'Download', 'type.error': 'Error', 'type.redirect': 'Redirect', 'type.bot': 'Bot',
+    'settings.title': 'Collection settings for {domain}', 'settings.tz': 'Timezone',
+    'settings.tz.help': 'Days and hours in reports use this timezone. Changing it affects new data only.',
+    'settings.tz.default': 'Server default ({tz})',
+    'settings.ips': 'Excluded IP addresses', 'settings.ips.help': 'One IP or CIDR range per line (max 50). Visits from these addresses are not counted.',
+    'settings.addip': 'Add my current IP ({ip})', 'settings.paths': 'Excluded path prefixes',
+    'settings.paths.help': 'One prefix per line, starting with / (max 50), e.g. /staging/.',
+    'settings.ui': 'Dashboard preferences', 'settings.default_range': 'Default date range', 'settings.theme': 'Theme',
+    'settings.theme.auto': 'Follow system', 'settings.theme.light': 'Light', 'settings.theme.dark': 'Dark',
+    'settings.save': 'Save settings', 'settings.saved': 'Settings saved. They apply to data collected from now on.',
+    'settings.note': 'Changes apply to new data only; existing reports are not recalculated.',
+    'settings.readonly': 'Settings are managed by each account owner in cPanel.',
+    'state.nodata.title': 'Collecting…', 'state.nodata.body': 'First data appears within 5 minutes after the next collection run.',
+    'state.nodomains.title': 'No domains yet', 'state.nodomains.body': 'Domains appear here once WebPulse has discovered them and collected their first log lines.',
+    'state.error.title': 'Could not load this report', 'state.retry': 'Try again',
+    'state.schema': 'Database is being upgraded. Reload in a minute.',
+    'state.empty_range': 'No traffic in this period. Try a longer range.',
+    'tz.changed': 'The timezone of this domain was changed on {date}; earlier days use the previous timezone.',
+    'error.network': 'The server could not be reached. Check your connection and try again.',
+    'common.close': 'Close', 'common.loading': 'Loading…', 'common.yes': 'Yes', 'common.no': 'No', 'common.save': 'Save',
+    'common.na': 'n/a', 'common.default': 'Default', 'common.on': 'On', 'common.off': 'Off'
+  };
+
+  /* Tooltip definitions — METRICS.md is normative. */
+  var D = {
+    visits: 'A visit is a series of hits from the same visitor with gaps under 30 minutes. Bots never create visits.',
+    visitors: 'Distinct visitors per day (IP + browser hashed with a daily salt). Over a range the daily values are summed, so a returning visitor counts once per day.',
+    pageviews: 'Requests for pages (HTML documents) answered with 200, 203, 206 or 304. Images, scripts, downloads and bots are excluded.',
+    pages_per_visit: 'Pageviews divided by visits.',
+    avg_duration: 'Time between the first and the last pageview of a visit, averaged over all visits. Single-page visits count as 0 s.',
+    bounce_rate: 'Share of visits with exactly one pageview.',
+    bytes: 'Bytes sent to human visitors (the size column of the access log). Bot traffic is counted separately.',
+    bot_share: 'Share of all requests made by crawlers, monitors and scripts, recognised by their user agent.',
+    hits: 'Every request from a human visitor: pages, images, scripts, downloads and errors.',
+    bot_hits: 'Requests made by crawlers, monitors and scripts.',
+    errors: 'Requests answered with a 4xx (client error, e.g. 404 Not Found) or 5xx (server error) status.',
+    exit_rate: 'Share of this page\'s pageviews that were the last page of a visit.',
+    entry_bounce: 'Share of visits starting on this page that left without viewing another page.',
+    share: 'Share of the total for the period.',
+    channel: 'Where the visit came from, judged on its first request: direct, organic search, social, referral, paid, email or campaign (UTM).',
+    country: 'Country of the visitor\'s IP address, from the GeoIP database installed by the administrator.',
+    heatmap: 'Visits by weekday and hour, counted at the first request of each visit.',
+    engagement: 'How long visits last and how many pages they include, counted when the visit ends.',
+    not_found: 'Paths answered with 404. Expand a row to see which sites link to it — those are broken links worth fixing.',
+    static: 'Images, scripts, stylesheets and fonts ranked by bandwidth. Large files here slow pages down.',
+    realtime: 'Activity of the last 30 minutes from the most recent collection run (logs are read every 5 minutes).'
+  };
+
+  function t(key, vars) {
+    var str = Object.prototype.hasOwnProperty.call(S, key) ? S[key] : key;
+    if (vars) {
+      str = str.replace(/\{(\w+)\}/g, function (m, k) { return vars[k] != null ? String(vars[k]) : m; });
+    }
+    return str;
+  }
+
+  window.WebPulseI18n = { t: t, strings: S, defs: D, def: function (k) { return D[k] || ''; } };
+})();

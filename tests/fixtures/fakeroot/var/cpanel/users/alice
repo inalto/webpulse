@@ -1,0 +1,8 @@
+BWLIMIT=unlimited
+DNS=example.com
+DNS1=shop.example.com
+FEATURELIST=default
+OWNER=root
+PLAN=default
+RS=jupiter
+USER=alice

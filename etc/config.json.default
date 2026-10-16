@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "default_enabled": true,
+  "timezone": null,
+  "raw_retention_days": 30,
+  "max_rows_per_dim": 1000,
+  "session_timeout_min": 30,
+  "store_ip": false,
+  "exclude_ips": [],
+  "exclude_paths": ["/.well-known/", "/cpanel", "/whm", "/webmail", "/cgi-sys/"],
+  "count_head_requests": false,
+  "geoip": { "enabled": false, "country_db": "/var/webpulse/geoip/dbip-country-lite.mmdb", "city_db": null },
+  "php_bin": null,
+  "paths": {
+    "data_dir": "/var/webpulse/data",
+    "registry_db": "/var/webpulse/webpulse.db",
+    "log_dir": "/var/webpulse/log",
+    "run_dir": "/var/webpulse/run",
+    "domlogs_dirs": ["/etc/apache2/logs/domlogs/{user}", "/etc/apache2/logs/domlogs", "/usr/local/apache/domlogs/{user}", "/var/log/nginx/domains"],
+    "archive_dir": "/home/{user}/logs",
+    "userdomains_file": "/etc/userdomains",
+    "cpanel_users_dir": "/var/cpanel/users",
+    "home_root": "/home"
+  }
+}

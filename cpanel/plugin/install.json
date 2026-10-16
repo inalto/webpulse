@@ -1,0 +1,14 @@
+[
+  {
+    "id": "webpulse",
+    "name": "WebPulse Analytics",
+    "description": "Visitor statistics generated from your access logs",
+    "uri": "webpulse/index.live.php",
+    "icon": "webpulse.svg",
+    "group_id": "metrics",
+    "order": 1,
+    "type": "link",
+    "featuremanager": 1,
+    "feature": "webpulse"
+  }
+]

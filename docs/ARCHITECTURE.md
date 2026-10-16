@@ -117,12 +117,12 @@
 |-------------------------|---------------------------------------------------|-----------------------|
 | Code                    | `/usr/local/webpulse`                             | root 0755             |
 | Config                  | `/etc/webpulse/config.json`                       | root 0600             |
-| Registry DB             | `/var/webpulse/webpulse.db`                       | root 0600             |
+| Registry DB             | `/var/webpulse/webpulse.db`                       | root 0600 (`/var/webpulse` and `data/` are 0711 so accounts can traverse to their own dir) |
 | Domain DBs              | `/var/webpulse/data/<user>/<domain>.db`           | root:<user> 0640, dir 0750 |
 | User settings           | `/var/webpulse/data/<user>/user/settings.json`    | <user> dir 0700 (written by the cPanel UI, read by the collector with symlink and size checks) |
 | GeoIP                   | `/var/webpulse/geoip/*.mmdb`                      | root 0644             |
 | Logs                    | `/var/webpulse/log/webpulse.log` (rotated by size, 5 × 5 MiB) | root 0600 |
-| Locks                   | `/var/webpulse/run/`                              | root 0700             |
+| Locks                   | `/var/webpulse/run/`                              | root 0711 (`run/hook/` is 1777 so the unprivileged Stats hook can drop flags) |
 | cPanel plugin files     | `/usr/local/cpanel/base/frontend/jupiter/webpulse/` | root 0755           |
 | WHM plugin CGI          | `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/` | root 0755            |
 | WHM icon                | `/usr/local/cpanel/whostmgr/docroot/addon_plugins/webpulse.png` | root 0644 |

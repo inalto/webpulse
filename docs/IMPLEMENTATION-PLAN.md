@@ -224,3 +224,17 @@ supply the document); `false` returns a full document (WHM, dev).
 After the three packages land: `make test`, `make serve` + screenshots,
 a code review pass for security (path traversal in `domain`, SQL whitelists,
 XSS in the SPA, symlink handling, privilege boundaries), then tag `v0.1.0`.
+
+## Contract extensions (as implemented, v0.1.0)
+
+The classes above grew beyond the minimal contract; the docblocks in the code
+are authoritative. Highlights: `App::cpanelUsers()`, `App::geoIp()`,
+`App::now()`/`App::clock()` (honours `WEBPULSE_NOW` for tests),
+`Config::EDITABLE`/`validate()`, `Paths::isValidUser()/isValidDomain()`,
+`Registry::refreshSummary()`, `startJob()`/`finishJob()` with `--job <id>`
+adoption by the CLI, `DomainStore::open()` throwing `Store\SchemaTooNew` on
+read-only opens of newer schemas, `UserSettings::write()` (atomic, 0600),
+`Store\Dims::{ALL, VISIT_LEVEL, NF_REF_SEP, OTHER}`. CLI commands implement
+`Cli\CommandInterface` (`summary()`, `usage()`, `options()`, `run(Cli, Args)`).
+Test support lives in `tests/support/` (`FakeRoot`, `SeedDb`, `T`, `Skip`,
+`MmdbWriter`, `devenv.php`).

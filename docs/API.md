@@ -125,7 +125,8 @@ Same rows as `report` without limit (max 10 000 rows), `text/csv`,
 
 ### `a=user_settings` (GET) / `a=save_user_settings` (POST, cPanel principal only)
 Read/write `/var/webpulse/data/<user>/user/settings.json` (see DATA-MODEL.md).
-The dev server and WHM return 403 on save.
+Only `user` principals may save (the dev server's `--user` principal included,
+so the Settings tab is testable); admin and reseller get 403, an empty body 400.
 
 ## Actions (admin scope — `admin` and `reseller` principals)
 
@@ -166,3 +167,16 @@ final class Principal {
 is the only place that decides visibility: for `user` it lists
 `<data_dir>/<user>/*.db` (plus Registry rows without data for the "no data
 yet" state); for `reseller` all accounts with `owner = name`; for `admin` all.
+
+## Fields beyond the examples above
+
+The implementation returns a few extra fields that the UI relies on:
+`overview.series.hits`; per-hour series that `hourly` cannot provide are `null`
+at `hour` granularity; `report` rows carry `label` (pretty name) and, for
+`page`, `exits`, for `bot`, `last_day`; with `series=1` a `series` object
+`{labels, granularity, metric, keys, key_labels, values}`; `visits_log` adds
+`next_before_id` (cursor tie-breaker), `live` (open visits included) and
+`retention_days`; `realtime` adds `last_event_at` and `last_collect_at`;
+`health` adds `peak_hour` and `errors_series.hits/bot_hits`. Admin
+`bot_share_30d` is computed from each domain's `daily` table (flag `partial`
+above 300 domains).

@@ -113,6 +113,6 @@ Hand-written, ≈ 500 lines: `lineChart`, `areaChart` (stacked option),
 `barChart` (vertical, horizontal), `donut`, `heatmap`, `sparkline`,
 `histogram`. All responsive (ResizeObserver, redraw on resize), tooltips via a
 single absolutely positioned `<div>`, colours from CSS custom properties so
-dark mode works, categorical palette of 8 colours that is colour-blind safe
-(Okabe–Ito), numbers formatted with `Intl.NumberFormat` (compact for axes),
+dark mode works, categorical palette of 8 colours validated for colour-vision
+deficiency on both light and dark surfaces, numbers formatted with `Intl.NumberFormat` (compact for axes),
 bytes formatted as KB/MB/GB (1024), durations as `1m 32s`.

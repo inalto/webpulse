@@ -1,0 +1,8 @@
+# WebPulse Analytics - managed by install.sh, edits are overwritten on update.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=""
+*/5 * * * * root /usr/local/webpulse/bin/webpulse collect --quiet
+*   * * * * root /usr/local/webpulse/bin/webpulse collect --hooked --quiet
+10  2 * * * root /usr/local/webpulse/bin/webpulse rollup --quiet
+30  4 1 * * root /usr/local/webpulse/bin/webpulse geoip-update --quiet
