@@ -167,6 +167,8 @@ Where things end up:
 **In cPanel (account owner).**
 
 1. Open **cPanel » Metrics » WebPulse Analytics**.
+
+On the **Meridian** theme (cPanel 138+) the sidebar is fixed by cPanel, so open WebPulse with **Ctrl+K → "WebPulse"** or at `…/frontend/meridian/index.html#/webpulse`; the dashboard renders inside the Meridian shell.
 2. If the icon is missing, grant the `webpulse` feature to the account's feature list in
    **WHM » Feature Manager** ("WebPulse Analytics").
 3. A domain shows *Collecting…* until its first log lines have been processed. Data usually appears

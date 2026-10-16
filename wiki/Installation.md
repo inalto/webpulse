@@ -145,6 +145,8 @@ By default collection is **on for every account**. Switch accounts off in WHM or
 ## Access for account owners
 
 Open **cPanel » Metrics » WebPulse Analytics**. If an account does not see the icon, tick the
+
+On the **Meridian** theme the sidebar is a fixed list of built-in hubs, so account owners open WebPulse with **Ctrl+K → "WebPulse"** (or `…/frontend/meridian/index.html#/webpulse`); it renders inside the Meridian shell.
 `webpulse` feature ("WebPulse Analytics") in **WHM » Feature Manager** for its feature list. See
 [[Troubleshooting and FAQ]].
 

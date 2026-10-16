@@ -13,7 +13,7 @@ tail -n 50 /var/webpulse/log/webpulse.log
 
 ## The plugin is not in Meridian's side menu
 
-Meridian's side navigation lists only *hubs* registered in `/usr/local/cpanel/base/frontend/meridian/_assets/_registry.js`; it does not show the classic Metrics icons at all. WebPulse 0.2.3 and later register their own hub there (an "Analytics" entry in the Monitor section that embeds the dashboard) and re-apply it after every cPanel update. If it is missing: run the installer again with `--update`, check that `grep -c '"slug": "webpulse"' /usr/local/cpanel/base/frontend/meridian/_assets/_registry.js` prints 1, make sure the account has the `webpulse` feature, then reload the page.
+On cPanel 138 the Meridian sidebar is a fixed list of seven built-in hubs (Dashboard, Websites, Email, Files, Databases, Security, Performance); no plugin can add an entry there, and the classic Metrics icons are not shown either. WebPulse 0.2.3 and later register a Meridian *hub* instead, which gives two ways in: press **Ctrl+K** (or click Search) and type "WebPulse", or open `…/frontend/meridian/index.html#/webpulse`. The dashboard then renders inside the Meridian shell. The hub is re-applied after every cPanel update; if the search entry is missing, run the installer again with `--update`, check that `grep -c '"slug": "webpulse"' /usr/local/cpanel/base/frontend/meridian/_assets/_registry.js` prints 1 and that the account has the `webpulse` feature, then reload the page. Should a future Meridian open its sidebar to registered hubs, WebPulse will appear there automatically.
 
 ## Reading `webpulse status`
 

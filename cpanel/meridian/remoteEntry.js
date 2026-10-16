@@ -65,9 +65,18 @@ async function buildModule() {
       };
       el.addEventListener('load', fit);
       const timer = window.setInterval(fit, 500);
+      // The shell titles pages from its own translation namespace, which plugins
+      // cannot extend ("nav.webpulse" would show): set a readable title ourselves.
+      const title = 'cPanel - WebPulse Analytics';
+      const titleTimer = window.setInterval(() => {
+        if (document.title !== title) {
+          document.title = title;
+        }
+      }, 300);
       return () => {
         el.removeEventListener('load', fit);
         window.clearInterval(timer);
+        window.clearInterval(titleTimer);
       };
     }, []);
     return h(

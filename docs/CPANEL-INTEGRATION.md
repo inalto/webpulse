@@ -73,8 +73,15 @@ Icons must use solid fills only, `viewBox` without `width`/`height`, no
 `<title>`, `<style>` or ids. Meridian reads `assets/application_icons/<id>.svg`
 directly (formats svg/png, see the theme's `config.json`).
 
-**Meridian side menu (hub registry).** Meridian is a React shell whose side
-navigation is built only from *hub manifests* listed in
+**Meridian (hub registry).** Verified on cPanel 138: Meridian's side
+navigation is a *fixed list of seven built-in hubs* inside the shell bundle
+(`Dashboard, Websites, Email, Files, Databases, Security, Performance`), only
+filtered by which of them are available. No plugin — not WP Toolkit, not
+cPanel's own Site Quality Monitoring — can add a sidebar entry in this version.
+What a plugin *can* do is register a hub: it gets a route (`#/<slug>`), an
+entry in the command palette (Ctrl+K / the Search box) through `searchIndex`,
+and will appear in the sidebar automatically should a future Meridian open it
+to registered hubs. Hubs are *hub manifests* listed in
 `/usr/local/cpanel/base/frontend/meridian/_assets/_registry.js` (owned by the
 `cpanel-meridian-plugin` RPM and regenerated on theme updates). Legacy
 dynamicui apps are not rendered there at all (`applications` is empty in the
@@ -86,7 +93,10 @@ remote: the shell calls `init(shareScope)` (React 19 singleton) and
 `get("./module")`, then renders the exported `WebPulseHub` component (first
 export ending in `Hub`) at `nav.path`. The component embeds
 `webpulse/frame.live.php` (the dashboard as a full document, no cPanel chrome)
-in a same-origin iframe sized to its content. The installer copies both files
+in a same-origin iframe sized to its content and sets the document title (the
+shell would otherwise show the untranslated key `nav.webpulse`). Account
+owners reach it with **Ctrl+K → "WebPulse"** or at `…/frontend/meridian/index.html#/webpulse`;
+the classic Metrics icon still exists for Jupiter. The installer copies both files
 into `meridian/webpulse/`, runs `webpulse meridian-registry add --registry
 … --manifest … --entry …` (idempotent, atomic, other entries untouched) and
 registers a `System::upcp` post hook (`hooks/upcp_post.sh`) that re-applies

@@ -4,14 +4,24 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-10-16
+
+### Fixed
+- Meridian hub: the browser tab now reads "cPanel - WebPulse Analytics"
+  instead of the untranslated key `nav.webpulse`.
+- Documentation now states precisely what Meridian allows (fixed sidebar;
+  search palette and `#/webpulse` route).
+
 ## [0.2.3] - 2026-10-16
 
 ### Added
-- cPanel Meridian: WebPulse now appears in the side navigation as an
-  "Analytics" hub (Monitor section). Meridian lists only hub manifests from
-  its registry, so the plugin ships a small Module-Federation hub that embeds
-  the dashboard; `webpulse meridian-registry add|remove` maintains the entry
-  and a `System::upcp` post hook re-applies it after cPanel updates.
+- cPanel Meridian: WebPulse is now reachable inside the Meridian shell as a
+  registered hub — via the command palette (Ctrl+K → "WebPulse") and the
+  `#/webpulse` route — rendering the dashboard natively. The Meridian sidebar
+  itself is a fixed list of built-in hubs on cPanel 138 and cannot be extended
+  by plugins; the hub will show up there automatically if a future version
+  allows it. `webpulse meridian-registry add|remove` maintains the registry
+  entry and a `System::upcp` post hook re-applies it after cPanel updates.
 - `frame.live.php`: the dashboard as a standalone document for embedding.
 
 ## [0.2.2] - 2026-10-16
@@ -139,6 +149,7 @@ First public version.
   resellers no longer read global settings; log messages are sanitised; `\z` anchors in name validation and a
   single account-name rule.
 
+[0.2.4]: https://github.com/inalto/webpulse/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/inalto/webpulse/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/inalto/webpulse/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/inalto/webpulse/compare/v0.2.0...v0.2.1
