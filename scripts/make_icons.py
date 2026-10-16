@@ -120,6 +120,22 @@ def svg():
     )
 
 
+def menu_svg():
+    """24x24 inline SVG for Meridian's left menu (LeftMenu.yaml). The theme colours it
+    through the CSS variable, like cPanel's own entries; no ids, defs or url() refs."""
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">'
+        '<polyline points="2,13 7,13 9.5,5.5 13,19 15.5,11 17,13 22,13" fill="none" '
+        'stroke="var(--cp-tertiary-contrast)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+        '</svg>'
+    )
+
+
+def left_menu_yaml():
+    """Meridian side-menu entry; `key` must equal the dynamicui id (install.json "id")."""
+    return "- key: webpulse\n  order: 35\n  icon: " + menu_svg() + "\n"
+
+
 def write_text(path, text):
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
@@ -136,6 +152,9 @@ def main():
     write_png(png_path, render())
     for p in svg_paths:
         write_text(p, svg())
+    menu_path = os.path.join(REPO, "cpanel", "plugin", "menu", "LeftMenu.yaml")
+    os.makedirs(os.path.dirname(menu_path), exist_ok=True)
+    write_text(menu_path, left_menu_yaml())
     print("wrote", os.path.relpath(png_path, REPO))
     for p in svg_paths:
         print("wrote", os.path.relpath(p, REPO))

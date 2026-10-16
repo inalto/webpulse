@@ -12,6 +12,7 @@
 #   WEBPULSE_VAR            data dir     (default: $PREFIX/var/webpulse)
 #   WEBPULSE_CRON_DIR       cron.d dir   (default: $PREFIX/etc/cron.d)
 #   WEBPULSE_APPS_DIR       AppConfig dir (default: $PREFIX/var/cpanel/apps)
+#   WEBPULSE_PLUGINS_DIR    cPanel plugin registry dir (default: $PREFIX/var/cpanel/plugins)
 #   WEBPULSE_SKIP_FIRST_COLLECT=1  do not start the first collect in the background
 #
 # WebPulse is a single static binary. install.sh obtains the release layout
@@ -50,6 +51,7 @@ wp_init_env() {
     VAR_DIR="${WEBPULSE_VAR:-$PREFIX/var/webpulse}"
     CRON_DIR="${WEBPULSE_CRON_DIR:-$PREFIX/etc/cron.d}"
     APPS_DIR="${WEBPULSE_APPS_DIR:-$PREFIX/var/cpanel/apps}"
+    PLUGINS_DIR="${WEBPULSE_PLUGINS_DIR:-$PREFIX/var/cpanel/plugins}"
     CPANEL_ROOT="${WEBPULSE_CPANEL_ROOT:-$PREFIX/usr/local/cpanel}"
     CPANEL_ROOT="${CPANEL_ROOT%/}"
 
@@ -59,6 +61,9 @@ wp_init_env() {
     CGI_DIR="$CPANEL_ROOT/whostmgr/docroot/cgi/webpulse"
     ADDON_ICON="$CPANEL_ROOT/whostmgr/docroot/addon_plugins/webpulse.png"
     APPCONF_FILE="$APPS_DIR/webpulse.conf"
+    # Plugin descriptor as cPanel expects it: /var/cpanel/plugins/<id>/{install.json,icon,menu/}
+    # (the menu/ directory is what puts the entry into the Meridian side menu).
+    PLUGIN_STAGE="$PLUGINS_DIR/webpulse"
 
     INSTALL_PLUGIN="$CPANEL_ROOT/scripts/install_plugin"
     UNINSTALL_PLUGIN="$CPANEL_ROOT/scripts/uninstall_plugin"
@@ -67,6 +72,7 @@ wp_init_env() {
     UNREGISTER_APPCONFIG="$CPANEL_ROOT/bin/unregister_appconfig"
     MANAGE_HOOKS="$CPANEL_ROOT/bin/manage_hooks"
     CPANEL_PHP="$CPANEL_ROOT/3rdparty/bin/php"
+    CPANEL_PERL="$CPANEL_ROOT/3rdparty/bin/perl"
 
     HOOK_SCRIPTS=("RunAll|stats_runall_pre.sh" "RunUser|stats_runuser_pre.sh")
     DEFAULT_VAR=/var/webpulse
@@ -455,9 +461,39 @@ wp_resync_frontends() { # undo helper used by update rollbacks
     wp_copy_whm_files "$rel"
 }
 
+# Stages the plugin descriptor (install.json, icon, menu/LeftMenu.yaml) under
+# /var/cpanel/plugins/webpulse, the directory install_plugin is pointed at. cPanel's
+# menu builder merges every /var/cpanel/plugins/*/menu/LeftMenu.yaml into the Meridian
+# side menu when install_plugin/uninstall_plugin run with a staging dir that has menu/.
+wp_stage_plugin_dir() {
+    local src="$INSTALL_LINK/cpanel/plugin"
+    [ -f "$src/install.json" ] || wp_fail "$src/install.json missing in the release"
+    local existed=0
+    [ -d "$PLUGIN_STAGE" ] && existed=1
+    mkdir -p "$PLUGINS_DIR" "$PLUGIN_STAGE"
+    [ "$existed" = 0 ] && wp_undo wp_safe_rm_rf "$PLUGIN_STAGE"
+    rm -rf "$PLUGIN_STAGE/menu"
+    cp -a "$src/." "$PLUGIN_STAGE/"
+    chmod 755 "$PLUGIN_STAGE" "$PLUGIN_STAGE/menu" 2>/dev/null || true
+    find "$PLUGIN_STAGE" -type f -exec chmod 644 {} +
+    wp_chown_root "$PLUGIN_STAGE"
+    wp_ok "Plugin descriptor staged in $PLUGIN_STAGE (with Meridian menu entry)"
+}
+
+# Rebuilds the Meridian side menu cache (after the staging dir was removed).
+wp_rebuild_menu() {
+    if [ -x "$CPANEL_PERL" ]; then
+        wp_try "rebuild LeftMenu" "$CPANEL_PERL" -MCpanel::Plugins::MenuBuilder -e 'Cpanel::Plugins::MenuBuilder::build_menu("LeftMenu")' \
+            && wp_ok "Meridian side menu rebuilt"
+    else
+        wp_warn "$CPANEL_PERL not found: the Meridian side menu cache was not rebuilt"
+    fi
+}
+
 wp_install_cpanel_plugin() {
     wp_head "cPanel plugin (account dashboard)"
     wp_select_themes
+    wp_stage_plugin_dir
     local t installed=0
     for t in "${WP_THEMES[@]}"; do
         if [ ! -d "$THEME_ROOT/$t" ]; then
@@ -476,9 +512,9 @@ wp_install_cpanel_plugin() {
         fi
         wp_copy_theme_files "$REL" "$t"
         wp_ok "Plugin files copied to $THEME_ROOT/$t/webpulse"
-        wp_run_idem "install_plugin ($t)" "$INSTALL_PLUGIN" "$INSTALL_LINK/cpanel/plugin" --theme "$t"
-        [ "$WAS_INSTALLED" = 0 ] && wp_undo wp_try_quiet "$UNINSTALL_PLUGIN" "$INSTALL_LINK/cpanel/plugin" --theme "$t"
-        wp_ok "Registered with cPanel ($t theme, Metrics group)"
+        wp_run_idem "install_plugin ($t)" "$INSTALL_PLUGIN" "$PLUGIN_STAGE" --theme "$t"
+        [ "$WAS_INSTALLED" = 0 ] && wp_undo wp_try_quiet "$UNINSTALL_PLUGIN" "$PLUGIN_STAGE" --theme "$t"
+        wp_ok "Registered with cPanel ($t theme, Metrics group; Meridian side menu)"
         installed=$((installed + 1))
     done
     [ "$installed" -gt 0 ] || wp_fail "No cPanel theme could be installed"
@@ -767,14 +803,21 @@ wp_uninstall() {
             for d in "$THEME_ROOT"/*/; do
                 [ -d "${d}webpulse" ] || continue
                 t=$(basename "$d")
-                if [ -x "$UNINSTALL_PLUGIN" ] && [ -d "$INSTALL_LINK/cpanel/plugin" ]; then
-                    wp_try "uninstall_plugin ($t)" "$UNINSTALL_PLUGIN" "$INSTALL_LINK/cpanel/plugin" --theme "$t" \
+                local stage="$PLUGIN_STAGE"
+                [ -f "$stage/install.json" ] || stage="$INSTALL_LINK/cpanel/plugin"
+                if [ -x "$UNINSTALL_PLUGIN" ] && [ -f "$stage/install.json" ]; then
+                    wp_try "uninstall_plugin ($t)" "$UNINSTALL_PLUGIN" "$stage" --theme "$t" \
                         && wp_ok "Unregistered from the $t theme"
                 else
-                    wp_warn "uninstall_plugin or $INSTALL_LINK/cpanel/plugin missing, only removing files for $t"
+                    wp_warn "uninstall_plugin or $stage missing, only removing files for $t"
                 fi
                 wp_safe_rm_rf "${d}webpulse"
             done
+        fi
+        if [ -d "$PLUGIN_STAGE" ]; then
+            wp_safe_rm_rf "$PLUGIN_STAGE"
+            wp_ok "Removed $PLUGIN_STAGE"
+            wp_rebuild_menu
         fi
         if [ "$need_restart" = 1 ]; then
             wp_restart_cpsrvd

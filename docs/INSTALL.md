@@ -61,7 +61,8 @@ and an archive containing symbolic or hard links is refused before it is unpacke
 5. Copies the shims into `/usr/local/cpanel/base/frontend/jupiter/webpulse/` (`index.live.php`,
    `api.live.php`, `lib/LiveApiUser.php`, `lib/CgiBridge.php`, icon, `VERSION`; no PHP library) and runs
    ```
-   /usr/local/cpanel/scripts/install_plugin /usr/local/webpulse/cpanel/plugin --theme jupiter
+   cp -a /usr/local/webpulse/cpanel/plugin/. /var/cpanel/plugins/webpulse/   # install.json, icon, menu/LeftMenu.yaml
+   /usr/local/cpanel/scripts/install_plugin /var/cpanel/plugins/webpulse --theme jupiter   # repeat with --theme meridian
    ```
    It also looks for cPanel's PHP (`/usr/local/cpanel/3rdparty/bin/php`, then `php`) and only warns when
    there is none: the cPanel page runs on it.
@@ -205,7 +206,8 @@ mkdir -p $D
 cp -a /usr/local/webpulse/cpanel/webpulse/. $D/
 cp /usr/local/webpulse/VERSION $D/VERSION
 find $D -type d -exec chmod 755 {} + ; find $D -type f -exec chmod 644 {} +
-/usr/local/cpanel/scripts/install_plugin /usr/local/webpulse/cpanel/plugin --theme jupiter
+cp -a /usr/local/webpulse/cpanel/plugin/. /var/cpanel/plugins/webpulse/   # install.json, icon, menu/LeftMenu.yaml
+   /usr/local/cpanel/scripts/install_plugin /var/cpanel/plugins/webpulse --theme jupiter   # repeat with --theme meridian
 
 # 3. WHM plugin
 mkdir -p /usr/local/cpanel/whostmgr/docroot/cgi/webpulse
@@ -256,7 +258,8 @@ asks for it. Re-installing later picks up the kept data.
 
 **The cPanel icon does not appear**
 * Re-run the registration and read its output:
-  `/usr/local/cpanel/scripts/install_plugin /usr/local/webpulse/cpanel/plugin --theme jupiter`
+  `cp -a /usr/local/webpulse/cpanel/plugin/. /var/cpanel/plugins/webpulse/   # install.json, icon, menu/LeftMenu.yaml
+   /usr/local/cpanel/scripts/install_plugin /var/cpanel/plugins/webpulse --theme jupiter   # repeat with --theme meridian`
 * The plugin only shows for accounts whose feature list includes `webpulse`
   (WHM » Feature Manager » WebPulse Analytics). The `default` feature list gets it automatically on
   most servers; custom lists need it ticked.
@@ -265,6 +268,7 @@ asks for it. Re-installing later picks up the kept data.
   it is absent the registration did not run or failed; if present, log out of cPanel and back in so the
   page is rebuilt. Also check that the files exist: `ls /usr/local/cpanel/base/frontend/jupiter/webpulse/`.
 * Using another theme? Jupiter and Meridian are detected automatically (any theme directory with a `dynamicui.conf`); for anything else install with `--theme <name>` or `--all-themes`.
+* Plugin missing from Meridian's side menu? The entry comes from `/var/cpanel/plugins/webpulse/menu/LeftMenu.yaml` merged into `/var/cpanel/menus/LeftMenu.yaml` by `install_plugin`. Re-run `install.sh --update` (0.2.2+) and check that `grep webpulse /var/cpanel/menus/LeftMenu.yaml` matches.
 * Icon missing in Jupiter's Metrics group? Jupiter compiles every application icon into one sprite SVG and drops `<defs>`, so icons must use solid fills only (no gradients, `<title>`, `<style>` or ids). The shipped icon follows that rule since 0.2.1; after replacing an icon run `/usr/local/cpanel/bin/sprite_generator` or wait for the scheduled rebuild.
 
 **The WHM entry is missing (WHM » Plugins » WebPulse Analytics)**

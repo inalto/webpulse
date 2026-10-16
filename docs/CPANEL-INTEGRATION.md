@@ -60,8 +60,8 @@ class (which is also how the account is identified).
 ```
 Register / unregister:
 ```
-/usr/local/cpanel/scripts/install_plugin   /usr/local/webpulse/cpanel/plugin --theme jupiter
-/usr/local/cpanel/scripts/uninstall_plugin /usr/local/webpulse/cpanel/plugin --theme jupiter
+/usr/local/cpanel/scripts/install_plugin   /var/cpanel/plugins/webpulse --theme jupiter   # staged copy of cpanel/plugin/
+/usr/local/cpanel/scripts/uninstall_plugin /var/cpanel/plugins/webpulse --theme jupiter
 ```
 The installer registers the plugin in every theme that has a `dynamicui.conf`
 under `/usr/local/cpanel/base/frontend/` (Jupiter and Meridian on current
@@ -72,6 +72,26 @@ icon using a gradient or any `url(#id)` reference renders as an empty square.
 Icons must use solid fills only, `viewBox` without `width`/`height`, no
 `<title>`, `<style>` or ids. Meridian reads `assets/application_icons/<id>.svg`
 directly (formats svg/png, see the theme's `config.json`).
+
+**Meridian side menu.** Meridian's left navigation ("aside") does not come
+from dynamicui but from menu files: `Cpanel::Plugins::MenuBuilder` merges
+`/usr/local/cpanel/Cpanel/Plugins/menus/LeftMenu.yaml` with every
+`/var/cpanel/plugins/*/**/LeftMenu.yaml` into the cache
+`/var/cpanel/menus/LeftMenu.yaml`; `install_plugin`/`uninstall_plugin` trigger
+that rebuild when the staging directory they are given contains a `menu/`
+directory. The convention (used by cPanel's own plugins) is therefore to keep
+the plugin descriptor at `/var/cpanel/plugins/<id>/` with `install.json`, the
+icon and `menu/LeftMenu.yaml`, and to run `install_plugin /var/cpanel/plugins/<id>
+--theme <theme>`. WebPulse ships `cpanel/plugin/menu/LeftMenu.yaml`:
+```yaml
+- key: webpulse        # must equal the dynamicui id (install.json "id")
+  order: 35            # wp-toolkit 20, team_manager 30, koality 40
+  icon: <svg …24×24… stroke="var(--cp-tertiary-contrast)" …/>
+```
+The icon is an inline 24×24 SVG coloured through the theme's CSS variable; the
+same sprite rules apply (no `<defs>`, ids or `url(#)`). On uninstall the
+installer removes `/var/cpanel/plugins/webpulse` and rebuilds the menu with
+`/usr/local/cpanel/3rdparty/bin/perl -MCpanel::Plugins::MenuBuilder -e 'Cpanel::Plugins::MenuBuilder::build_menu("LeftMenu")'`.
 
 `featuremanager: 1` adds a "WebPulse Analytics" feature to WHM » Feature
 Manager, so hosts can hide the icon per package. Collection is governed

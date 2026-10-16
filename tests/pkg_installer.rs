@@ -331,7 +331,10 @@ fn fresh_install_registers_everything() {
     // cPanel tools were driven exactly as documented
     let log = p.stub_log();
     for expected in [
-        format!("install_plugin {l}/cpanel/plugin --theme jupiter"),
+        format!(
+            "install_plugin {} --theme jupiter",
+            p.plugins.join("webpulse").display()
+        ),
         format!("register_appconfig {l}/whm/webpulse.conf"),
         format!(
             "manage_hooks add script {l}/hooks/stats_runall_pre.sh --manual --category Stats --event RunAll --stage pre"
@@ -343,6 +346,16 @@ fn fresh_install_registers_everything() {
         assert!(log.contains(&expected), "{expected}: {}", log.join("|"));
     }
     assert_exists(&p.state.join("plugin.jupiter"));
+    // the plugin descriptor is staged where cPanel's menu builder looks for Meridian entries
+    let stage = p.plugins.join("webpulse");
+    for f in ["install.json", "webpulse.svg", "menu/LeftMenu.yaml"] {
+        assert_exists(&stage.join(f));
+    }
+    assert_eq!(
+        mode(&stage.join("menu/LeftMenu.yaml")) & 0o777,
+        0o644,
+        "menu mode"
+    );
 }
 
 #[test]
@@ -535,8 +548,8 @@ fn a_failing_cpanel_step_prints_the_command_and_rolls_everything_back() {
 
     let log = p.stub_log();
     let expected = format!(
-        "uninstall_plugin {}/cpanel/plugin --theme jupiter",
-        p.link().display()
+        "uninstall_plugin {} --theme jupiter",
+        p.plugins.join("webpulse").display()
     );
     assert!(
         log.contains(&expected),
@@ -643,6 +656,7 @@ fn uninstall_reverses_everything_and_keeps_data_purge_removes_it() {
         .env("WEBPULSE_VAR", &p.var)
         .env("WEBPULSE_CRON_DIR", &p.cron)
         .env("WEBPULSE_APPS_DIR", &p.apps)
+        .env("WEBPULSE_PLUGINS_DIR", &p.plugins)
         .env("NO_COLOR", "1")
         .stdin("")
         .go();
@@ -660,8 +674,15 @@ fn uninstall_reverses_everything_and_keeps_data_purge_removes_it() {
         "unregister_appconfig"
     );
     let uninstall = format!(
-        "uninstall_plugin {}/cpanel/plugin --theme jupiter",
-        link.display()
+        "uninstall_plugin {} --theme jupiter",
+        p.plugins.join("webpulse").display()
+    );
+    assert_missing(&p.plugins.join("webpulse"));
+    assert!(
+        log.iter()
+            .any(|l| l.starts_with("perl -MCpanel::Plugins::MenuBuilder")),
+        "menu cache rebuilt after uninstall: {}",
+        log.join("|")
     );
     assert!(
         log.contains(&uninstall),

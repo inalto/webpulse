@@ -300,6 +300,33 @@ fn png_icon_is_a_48x48_rgba_image_with_transparency() {
 }
 
 #[test]
+fn meridian_left_menu_entry_is_valid() {
+    let r = repo();
+    let yaml = read(&r.join("cpanel/plugin/menu/LeftMenu.yaml"));
+    let lines: Vec<&str> = yaml.lines().collect();
+    assert_eq!(lines.len(), 3, "one entry with key/order/icon: {yaml}");
+    assert_eq!(
+        lines[0], "- key: webpulse",
+        "key must equal install.json id"
+    );
+    let order = lines[1].trim().strip_prefix("order: ").expect("order line");
+    order.parse::<u32>().expect("order is an integer");
+    let icon = lines[2].trim().strip_prefix("icon: ").expect("icon line");
+    assert!(
+        icon.starts_with("<svg ") && icon.ends_with("</svg>"),
+        "inline svg"
+    );
+    assert_contains(icon, r#"viewBox="0 0 24 24""#, "24x24 viewBox");
+    assert_contains(icon, "var(--cp-tertiary-contrast)", "theme colour variable");
+    for forbidden in ["<defs", "url(#", "<title", "<style", " id="] {
+        assert!(!icon.contains(forbidden), "{forbidden} in menu icon");
+    }
+    // the installer ships the whole descriptor directory to /var/cpanel/plugins/webpulse
+    let json = read(&r.join("cpanel/plugin/install.json"));
+    assert_contains(&json, r#""id": "webpulse""#, "install.json id");
+}
+
+#[test]
 fn svg_icons_are_well_formed_48x48_and_identical() {
     let r = repo();
     let paths = [

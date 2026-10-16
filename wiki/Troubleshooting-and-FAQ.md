@@ -11,6 +11,10 @@ tail -n 50 /var/webpulse/log/webpulse.log
 > WebPulse was developed without a real cPanel server. Several items below say "location may differ
 > between cPanel versions". If you find a behaviour that differs, please open an issue.
 
+## The plugin is not in Meridian's side menu
+
+Meridian's left navigation is built from menu files, not from the Metrics group. WebPulse 0.2.2 and later ship `menu/LeftMenu.yaml` and stage the plugin descriptor at `/var/cpanel/plugins/webpulse/`, which `install_plugin` merges into `/var/cpanel/menus/LeftMenu.yaml`. If the entry is missing, run the installer again with `--update` and check with `grep webpulse /var/cpanel/menus/LeftMenu.yaml`. Reload the cPanel page afterwards.
+
 ## Reading `webpulse status`
 
 `status` prints one line per topic:

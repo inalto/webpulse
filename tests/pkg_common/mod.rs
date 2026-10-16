@@ -395,6 +395,8 @@ pub struct Sandbox {
     pub var: PathBuf,
     pub cron: PathBuf,
     pub apps: PathBuf,
+    /// `/var/cpanel/plugins` of the fake server
+    pub plugins: PathBuf,
     /// one line per cPanel tool invocation: "<tool> <args>"
     pub log: PathBuf,
     /// one line per stub binary invocation: "<args> [cfg=$WEBPULSE_CONFIG]"
@@ -414,6 +416,7 @@ impl Sandbox {
             var: base.join("var-webpulse"),
             cron: base.join("cron.d"),
             apps: base.join("cpanel-apps"),
+            plugins: base.join("cpanel-plugins"),
             log: base.join("stub.log"),
             engine_log: base.join("engine.log"),
             state: base.join("stub-state"),
@@ -421,7 +424,7 @@ impl Sandbox {
             base,
             tmp,
         };
-        for d in [&p.prefix, &p.cron, &p.apps, &p.state] {
+        for d in [&p.prefix, &p.cron, &p.apps, &p.plugins, &p.state] {
             std::fs::create_dir_all(d).unwrap();
         }
         p.fake_cpanel();
@@ -480,6 +483,8 @@ rm -f "@STATE@/plugin.$theme""#
                     .to_string(),
             ),
             ("scripts/restartsrv_cpsrvd", "echo restarted".to_string()),
+            // cPanel perl: only used to rebuild the Meridian menu cache on uninstall
+            ("3rdparty/bin/perl", "exit 0".to_string()),
             (
                 "bin/register_appconfig",
                 r#"[ -f "$1" ] || { echo "no such conf $1" >&2; exit 2; }
@@ -526,6 +531,7 @@ esac"#
             ("WEBPULSE_VAR".into(), s(&self.var)),
             ("WEBPULSE_CRON_DIR".into(), s(&self.cron)),
             ("WEBPULSE_APPS_DIR".into(), s(&self.apps)),
+            ("WEBPULSE_PLUGINS_DIR".into(), s(&self.plugins)),
             ("WEBPULSE_SKIP_FIRST_COLLECT".into(), "1".into()),
             // never build for real by accident
             ("WEBPULSE_CARGO".into(), "/nonexistent/cargo".into()),
@@ -566,7 +572,13 @@ esac"#
     /// Files and directories of WebPulse left in prefix/cron/apps/cpanel.
     pub fn leftovers(&self) -> Vec<String> {
         let mut found = Vec::new();
-        for root in [&self.prefix, &self.cron, &self.apps, &self.cpanel] {
+        for root in [
+            &self.prefix,
+            &self.cron,
+            &self.apps,
+            &self.plugins,
+            &self.cpanel,
+        ] {
             for rel in list_tree(root) {
                 if rel.contains("webpulse") && !rel.starts_with("3rdparty") {
                     found.push(format!("{}/{rel}", root.display()));
