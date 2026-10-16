@@ -1,9 +1,41 @@
 //! Clock helpers. `WEBPULSE_NOW` (unix seconds or RFC 3339) freezes "now" for tests.
+//!
+//! The frozen clock is a test hook: it is honoured when the process is not root, or
+//! when it runs on a configuration other than the production `/etc/webpulse/config.json`
+//! (decided by `App` at boot through [`set_fake_clock_allowed`]). Before that decision,
+//! only unprivileged processes honour it.
+
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use chrono::{DateTime, TimeZone, Utc};
 
-/// Current unix time, honouring `WEBPULSE_NOW`.
+/// 0 = undecided (honour only when not root), 1 = allowed, 2 = denied.
+static FAKE_CLOCK: AtomicU8 = AtomicU8::new(0);
+
+/// Decides whether `WEBPULSE_NOW` is honoured by this process.
+pub fn set_fake_clock_allowed(allowed: bool) {
+    FAKE_CLOCK.store(if allowed { 1 } else { 2 }, Ordering::Relaxed);
+}
+
+/// Whether `WEBPULSE_NOW` may be honoured: when not root, or when the configuration
+/// in use is not the production file.
+pub fn fake_clock_policy(root: bool, production_config: bool) -> bool {
+    !root || !production_config
+}
+
+fn fake_clock_allowed() -> bool {
+    match FAKE_CLOCK.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => !crate::util::fs::is_root(),
+    }
+}
+
+/// Current unix time, honouring `WEBPULSE_NOW` (see the module documentation).
 pub fn now_ts() -> i64 {
+    if !fake_clock_allowed() {
+        return Utc::now().timestamp();
+    }
     if let Ok(v) = std::env::var("WEBPULSE_NOW") {
         let v = v.trim();
         if let Ok(n) = v.parse::<i64>() {

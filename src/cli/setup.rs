@@ -67,10 +67,10 @@ pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
         (p.hook_dir(), 0o1777),
         (p.geoip_dir().to_path_buf(), 0o755),
     ];
+    // only directories created here get their mode/ownership; existing ones are left
+    // alone (a configured path may point at a directory the administrator manages)
     for (dir, mode) in dirs {
-        let existed = dir.is_dir();
-        fs::ensure_dir(&dir, mode, Some("root"), Some("root"))?;
-        if !existed {
+        if fs::ensure_dir(&dir, mode, Some("root"), Some("root"))? {
             done.push(format!("created {} ({:o})", dir.display(), mode));
         }
     }

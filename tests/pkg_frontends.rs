@@ -892,3 +892,67 @@ fn whm_cgis_also_find_bin_webpulse_next_to_the_script() {
         "cgi --whm --page --api-url api.cgi\n"
     );
 }
+
+#[test]
+fn whm_cgis_ignore_a_webpulse_bin_that_is_group_or_other_writable() {
+    // WEBPULSE_BIN must be owned by the user running the shim (root under cpsrvd) and not
+    // group/other-writable, file and directory alike; otherwise the default path is used
+    if real_install_exists() {
+        skip!("a real installation exists on this machine");
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TmpDir::new("whmtrust");
+    for cgi in ["index.cgi", "api.cgi"] {
+        script(&dir.join(cgi), &read(&repo().join("whm/cgi").join(cgi)));
+    }
+    let set_mode =
+        |p: &Path, m: u32| std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap();
+    let stub = Stub::new(b"Status: 200 OK\r\nContent-Type: text/plain\r\n\r\nstub", 0);
+    let stub_dir = stub.bin.parent().unwrap().to_path_buf();
+    let run = || {
+        cmd(&["bash", &s(&dir.join("api.cgi"))])
+            .env("WEBPULSE_BIN", stub.path())
+            .env("REMOTE_USER", "root")
+            .env("REQUEST_METHOD", "GET")
+            .go()
+    };
+    // trusted: used
+    let (_, out) = run();
+    assert_contains(&out, "stub", "a trusted WEBPULSE_BIN is used");
+    // group-writable binary: ignored (no default install here -> generic 500)
+    set_mode(&stub.bin, 0o775);
+    let (rc, out) = run();
+    assert_eq!(rc, 0, "{out}");
+    assert!(
+        out.starts_with("Status: 500 "),
+        "group-writable binary ignored: {out}"
+    );
+    set_mode(&stub.bin, 0o757);
+    let (_, out) = run();
+    assert!(
+        out.starts_with("Status: 500 "),
+        "other-writable binary ignored: {out}"
+    );
+    set_mode(&stub.bin, 0o755);
+    // world-writable directory: ignored (the binary could be swapped)
+    set_mode(&stub_dir, 0o777);
+    let (_, out) = run();
+    assert!(
+        out.starts_with("Status: 500 "),
+        "writable directory ignored: {out}"
+    );
+    set_mode(&stub_dir, 0o755);
+    // a symlink to an untrusted binary is judged by its target
+    let link = dir.join("link-webpulse");
+    std::os::unix::fs::symlink(&stub.bin, &link).unwrap();
+    set_mode(&stub.bin, 0o777);
+    let (_, out) = cmd(&["bash", &s(&dir.join("index.cgi"))])
+        .env("WEBPULSE_BIN", &link)
+        .env("REMOTE_USER", "root")
+        .go();
+    assert!(
+        out.starts_with("Status: 500 "),
+        "symlink target checked: {out}"
+    );
+    set_mode(&stub.bin, 0o755);
+}

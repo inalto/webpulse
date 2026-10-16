@@ -143,7 +143,7 @@ impl DomainStore {
         }
         let dir = paths.user_dir(user);
         if !dir.is_dir() || fs::is_root() {
-            fs::ensure_dir(&dir, 0o750, Some("root"), Some(user))?;
+            fs::enforce_dir(&dir, 0o750, Some("root"), Some(user))?;
         }
         let private = paths.user_private_dir(user);
         if fs::is_link(&private) {

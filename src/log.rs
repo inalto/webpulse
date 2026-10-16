@@ -189,7 +189,13 @@ impl Log {
         }
         rotate(file);
         let fresh = !file.exists();
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(file) {
+        use std::os::unix::fs::OpenOptionsExt;
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(file)
+        {
             crate::util::lock::flock(&f, libc::LOCK_EX);
             let _ = f.write_all(line.as_bytes());
             crate::util::lock::flock(&f, libc::LOCK_UN);

@@ -51,9 +51,17 @@ esac
 
 if [ -n "$user" ] && [ -d "$FLAG_DIR" ]; then
     flag="${FLAG_DIR%/}/$user"
-    if [ ! -L "$flag" ]; then
-        touch -- "$flag" >/dev/null 2>&1 || true
-    fi
+    # Symlink safety. bash cannot open with O_NOFOLLOW, so `touch` could in theory follow
+    # a symlink planted between the check and the touch. That is harmless here:
+    #  - the flag directory is root-owned with the sticky bit (1777), so only its creator
+    #    can replace a name in it, and the kernel's fs.protected_symlinks (on by default on
+    #    every cPanel-supported distribution) refuses to follow a symlink in a sticky
+    #    world-writable directory unless it belongs to the follower or the directory owner;
+    #  - the hook runs as the account itself, so the worst a race could do is update the
+    #    mtime of a file this account can already write.
+    # The check right before `touch` skips an existing symlink outright.
+    [ -L "$flag" ] && exit 0
+    touch -- "$flag" >/dev/null 2>&1 || true
 fi
 
 exit 0

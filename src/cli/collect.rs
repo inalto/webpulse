@@ -256,12 +256,33 @@ pub fn run(ctx: &Ctx, raw: &RawArgs, args: &Args) -> Result<i32> {
     Ok(report(ctx, &mut job, tot, t0, record))
 }
 
+/// `WEBPULSE_CHILD_EXE` (tests): the program to run for per-account children. Ignored
+/// when running as root, so the environment cannot make the root collector execute an
+/// arbitrary program.
+pub fn child_exe_override() -> Option<std::path::PathBuf> {
+    child_exe_from(
+        crate::util::fs::is_root(),
+        std::env::var_os("WEBPULSE_CHILD_EXE"),
+    )
+}
+
+/// Policy of [`child_exe_override`]: the value of `WEBPULSE_CHILD_EXE` when not root.
+pub fn child_exe_from(root: bool, value: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    if root {
+        return None;
+    }
+    value
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
 /// Collects one account in a child process (`collect --user U --child --json`) and
 /// returns its JSON totals; `None` when the child failed (logged, never fatal here).
 pub fn collect_in_child(ctx: &Ctx, user: &str) -> Option<Value> {
     let app = ctx.app().ok()?;
-    let exe = match std::env::var_os("WEBPULSE_CHILD_EXE").filter(|v| !v.is_empty()) {
-        Some(e) => std::path::PathBuf::from(e),
+    // test hook: honoured only for unprivileged runs, never when collecting as root
+    let exe = match child_exe_override() {
+        Some(e) => e,
         None => match std::env::current_exe() {
             Ok(e) => e,
             Err(_) => {

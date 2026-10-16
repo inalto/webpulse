@@ -170,6 +170,17 @@ Intentional differences are listed at the end of this file (none expected).
   test fails below 50 000 lines/s.
 * **Tests.** `cargo test --release` runs everything: unit tests, the engine
   and HTTP integration tests and the packaging tests.
+* **Security hardening (post-review).** Release workflow with a read-only
+  token except for an attesting publish job, SHA-pinned actions and no cache;
+  test hooks (`WEBPULSE_CHILD_EXE`, `WEBPULSE_CGI_TESTING`, `WEBPULSE_NOW` on
+  the production config, `WEBPULSE_BIN`/`WEBPULSE_HOME` in the shims) ignored
+  on root paths; archives opened with `openat` under an `O_NOFOLLOW` directory
+  descriptor and re-checked on `fstat`; registry files 0600 from creation;
+  per-line clamps (size ≤ 1 TiB, status 100-999, date within 15 years/2 days)
+  with saturating counters; configured directories never re-moded nor allowed
+  to be system directories; https-only, link-free, same-tag installer
+  downloads (`tests/sec_hardening.rs`). Parity is unchanged: only pathological
+  inputs behave differently.
 
 ## Removal of the PHP implementation (done)
 
@@ -223,7 +234,8 @@ are outside what it compares or are deliberate.
   `<run_dir>/.php_bin_warned` marker records that it was logged.
 * **Child processes of the global collect.** The binary runs itself
   (`current_exe() collect --user U --child --json`). Tests can point
-  `WEBPULSE_CHILD_EXE` at a wrapper instead of setting `php_bin`.
+  `WEBPULSE_CHILD_EXE` at a wrapper instead of setting `php_bin` (ignored when
+  the collector runs as root).
 * **Timing and memory fields.** `elapsed`, `lines_per_sec` and `peak_memory`
   are measured differently. `peak_memory` is the peak RSS of the process
   (`VmHWM`), where 0.1.0 reported PHP's `memory_get_peak_usage(true)`.

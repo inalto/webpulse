@@ -25,7 +25,25 @@ if [ "${1:-}" = "--describe" ]; then
     exit 0
 fi
 
-WEBPULSE_HOME=${WEBPULSE_HOME:-$(dirname -- "$HOOK_DIR")}
+# trusted PATH: owned by the user running the hook (root under cPanel) and not
+# group/other-writable (symlinks followed).
+trusted() {
+    local st mode
+    st=$(stat -L -c '%u %a' -- "$1" 2>/dev/null) || return 1
+    [ "${st%% *}" = "$EUID" ] || return 1
+    mode=${st##* }
+    (( (8#$mode & 8#022) == 0 ))
+}
+
+# $WEBPULSE_HOME (tests, relocated installs) is honoured only when the directory, its
+# bin/ and bin/webpulse all pass `trusted`; otherwise the install next to this hook is used.
+DEFAULT_HOME=$(dirname -- "$HOOK_DIR")
+if [ -n "${WEBPULSE_HOME:-}" ] && trusted "$WEBPULSE_HOME" && trusted "$WEBPULSE_HOME/bin" \
+    && trusted "$WEBPULSE_HOME/bin/webpulse"; then
+    :
+else
+    WEBPULSE_HOME=$DEFAULT_HOME
+fi
 BIN="$WEBPULSE_HOME/bin/webpulse"
 
 if [ -x "$BIN" ]; then

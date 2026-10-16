@@ -1400,3 +1400,50 @@ fn json_numbers_keep_php_types() {
     );
     assert!(o.body.contains("\"bounces\":null"));
 }
+
+#[test]
+fn admin_accounts_offset_is_clamped_and_cannot_overflow() {
+    let env = shared(SEED);
+    for off in ["9223372036854775807", "99999999999999999999", "1000001"] {
+        let a = ok(
+            &api(
+                &env,
+                "admin",
+                &[("a", "admin.accounts"), ("offset", off), ("limit", "500")],
+                None,
+            ),
+            "admin.accounts",
+        );
+        assert_eq!(a["accounts"], json!([]), "offset {off}");
+        assert_eq!(a["has_more"], json!(false), "offset {off}");
+    }
+}
+
+#[test]
+fn reports_survive_counters_that_overflow_an_sql_sum() {
+    let env = fresh(SEED, "http-api-sum-overflow");
+    let c = rusqlite::Connection::open(env.root.join("var/webpulse/data/alice/example.com.db"))
+        .unwrap();
+    c.execute(
+        "UPDATE daily SET bytes = 9223372036854775000, hits = 9223372036854775000",
+        [],
+    )
+    .unwrap();
+    c.execute(
+        "UPDATE dim_daily SET bytes = 9223372036854775000, hits = 9223372036854775000",
+        [],
+    )
+    .unwrap();
+    drop(c);
+    let mut queries = vec![
+        q(&[("a", "overview"), ("range", "30d")]),
+        q(&[("a", "health")]),
+    ];
+    for dim in dimension::ALL {
+        queries.push(q(&[("a", "report"), ("name", dim), ("range", "30d")]));
+    }
+    for query in queries {
+        let r = api(&env, "user:alice", &query, None);
+        assert_eq!(r.status, 200, "{query:?}: {}", r.body);
+    }
+}

@@ -1216,3 +1216,148 @@ fn the_real_binary_installs_into_the_sandbox() {
     assert_eq!(rc, 0, "{out}");
     assert_eq!(p.leftovers(), Vec::<String>::new(), "clean after purge");
 }
+
+/// A fake `curl` on PATH for the GitHub URL tests: logs every argv (one line per
+/// call) and serves `routes` (URL -> file); every other URL is a 404.
+fn fake_github_curl(dir: &Path, log: &Path, routes: &[(String, PathBuf)]) -> PathBuf {
+    let mut cases = String::new();
+    for (u, f) in routes {
+        cases.push_str(&format!(
+            "    '{u}') cp '{}' \"$out\"; code=200 ;;\n",
+            f.display()
+        ));
+    }
+    let body = format!(
+        r#"#!/bin/bash
+echo "$*" >> '{log}'
+out=''; url=''
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o|-w|--retry|--connect-timeout|--proto|--proto-redir) [ "$1" = -o ] && out=$2; shift ;;
+        -*) ;;
+        *) url=$1 ;;
+    esac
+    shift
+done
+code=404
+case "$url" in
+{cases}esac
+[ -n "$out" ] && [ "$code" != 200 ] && : > "$out"
+printf '%s' "$code"
+[ "$code" = 200 ]
+"#,
+        log = log.display()
+    );
+    script(&dir.join("curl"), &body)
+}
+
+#[test]
+fn a_release_without_an_asset_for_this_cpu_builds_the_same_tag_not_main() {
+    let p = Sandbox::new();
+    let tree = source_checkout(&p, "0.5.0", &p.base.join("srctree"));
+    let tarball = source_tarball(&p, &tree);
+    let fake = p.dir("fakebin");
+    script(
+        &fake.join("uname"),
+        "#!/bin/sh\ncase \"$1\" in -m) echo x86_64;; -s) echo Linux;; *) exec /usr/bin/env uname \"$@\";; esac\n",
+    );
+    let latest = p.base.join("latest.json");
+    write(&latest, r#"{"tag_name": "v0.5.0"}"#);
+    let curl_log = p.base.join("curl.log");
+    let tag_src = "https://codeload.github.com/inalto/webpulse/tar.gz/refs/tags/v0.5.0";
+    fake_github_curl(
+        &fake,
+        &curl_log,
+        &[
+            (
+                "https://api.github.com/repos/inalto/webpulse/releases/latest".into(),
+                latest.clone(),
+            ),
+            (tag_src.into(), tarball.clone()),
+        ],
+    );
+    let cargo = script(
+        &p.base.join("fake-cargo"),
+        &format!(
+            "#!/bin/bash\nmkdir -p target/release\ncat > target/release/webpulse <<'EOS'\n{}EOS\nchmod 755 target/release/webpulse\n",
+            stub_binary_body("built-from-tag")
+        ),
+    );
+    let path = format!(
+        "{}:{}",
+        fake.display(),
+        std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into())
+    );
+    let (rc, out) = p
+        .installer_piped(&["-y", "--no-cron"])
+        .env("PATH", &path)
+        .env("WEBPULSE_CARGO", &cargo)
+        .go();
+    assert_eq!(rc, 0, "{out}");
+    assert_contains(
+        &out,
+        "falling back to a build from source of release v0.5.0 (not main)",
+        "installer",
+    );
+    let calls = read(&curl_log);
+    assert_contains(&calls, tag_src, "the tag's source tarball");
+    assert_not_contains(&calls, "tar.gz/main", "never the development branch");
+    for l in calls.lines().filter(|l| l.contains("https://")) {
+        assert_contains(l, "--proto =https --proto-redir =https", "https-only curl");
+    }
+    assert_contains(
+        &read(&p.link().join("bin/webpulse")),
+        "built-from-tag",
+        "installed binary",
+    );
+}
+
+#[test]
+fn archives_with_symlinks_or_hard_links_are_refused() {
+    let p = Sandbox::new();
+    let src = make_source(&p, "0.3.0", Some(&p.base.join("pristine")), "downloaded");
+    for (kind, mk) in [("symlink", "ln -s /etc/passwd"), ("hardlink", "ln")] {
+        let work = p.base.join(format!("work-{kind}"));
+        let top = work.join("webpulse-0.3.0-x86_64-unknown-linux-musl");
+        std::fs::create_dir_all(&work).unwrap();
+        let (rc, out) = cmd(&["cp", "-a", &s(&src), &s(&top)]).go();
+        assert_eq!(rc, 0, "{out}");
+        let target = if kind == "symlink" {
+            String::new()
+        } else {
+            s(&top.join("VERSION"))
+        };
+        let sh = format!("{mk} {target} '{}'", top.join("evil").display());
+        let (rc, out) = cmd(&["sh", "-c", &sh]).go();
+        assert_eq!(rc, 0, "{out}");
+        let tarball = p.base.join(format!("{kind}.tar.gz"));
+        let (rc, out) = cmd(&[
+            "tar",
+            "-czf",
+            &s(&tarball),
+            "-C",
+            &s(&work),
+            "webpulse-0.3.0-x86_64-unknown-linux-musl",
+        ])
+        .go();
+        assert_eq!(rc, 0, "{out}");
+        let (rc, out) = p
+            .installer_piped(&["--no-cron", "-y"])
+            .env("WEBPULSE_DOWNLOAD_URL", url(&tarball))
+            .env("WEBPULSE_DOWNLOAD_SHA256", sha256_hex(&tarball))
+            .go();
+        assert_eq!(rc, 1, "{kind}: {out}");
+        assert_contains(
+            &out,
+            "The archive contains symbolic or hard links",
+            &format!("{kind} refused"),
+        );
+        assert_missing(&p.link());
+    }
+}
+
+fn sha256_hex(p: &Path) -> String {
+    let (rc, out) = cmd(&["sha256sum", &s(p)]).go();
+    assert_eq!(rc, 0, "{out}");
+    out.split_whitespace().next().unwrap().to_string()
+}

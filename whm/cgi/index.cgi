@@ -7,9 +7,23 @@
 # principal (administrator or reseller) from REMOTE_USER.
 #
 # Binary: $WEBPULSE_BIN, else /usr/local/webpulse/bin/webpulse, else bin/webpulse
-# next to this script (tests).
+# next to this script (tests). $WEBPULSE_BIN is honoured only when the file (after
+# symlinks) and its directory are owned by the user running this shim (root under
+# cpsrvd) and are not group/other-writable, so an environment variable cannot make
+# root execute somebody else's program.
+
+trusted() {
+    local st mode
+    st=$(stat -L -c '%u %a' -- "$1" 2>/dev/null) || return 1
+    [ "${st%% *}" = "$EUID" ] || return 1
+    mode=${st##* }
+    (( (8#$mode & 8#022) == 0 ))
+}
 
 bin=${WEBPULSE_BIN:-}
+if [ -n "$bin" ] && ! { trusted "$bin" && trusted "$(dirname -- "$(readlink -f -- "$bin" 2>/dev/null || printf '%s' "$bin")")"; }; then
+    bin=''
+fi
 if [ -z "$bin" ] || [ ! -x "$bin" ]; then
     bin=/usr/local/webpulse/bin/webpulse
     if [ ! -x "$bin" ]; then

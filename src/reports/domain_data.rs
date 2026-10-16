@@ -170,8 +170,25 @@ impl Row {
     }
 }
 
-/// Runs a prepared statement and returns all rows.
+/// True for SQLite's "integer overflow" error (raised by `SUM()` on 64-bit overflow).
+pub fn is_integer_overflow(e: &dyn std::fmt::Display) -> bool {
+    e.to_string().contains("integer overflow")
+}
+
+/// Runs a prepared statement and returns all rows. An aggregate that overflows 64
+/// bits (only possible with forged counters) yields no rows (= zeros) and a warning
+/// on stderr instead of failing the whole report.
 pub fn query_rows(conn: &Connection, sql: &str, args: &[Arg]) -> Result<Vec<Row>> {
+    match query_rows_inner(conn, sql, args) {
+        Err(e) if is_integer_overflow(&e) => {
+            eprintln!("webpulse: warning: integer overflow in a statistics query; treated as 0");
+            Ok(Vec::new())
+        }
+        r => r,
+    }
+}
+
+fn query_rows_inner(conn: &Connection, sql: &str, args: &[Arg]) -> Result<Vec<Row>> {
     let mut st = conn.prepare(sql)?;
     let cols: std::sync::Arc<Vec<String>> =
         std::sync::Arc::new(st.column_names().iter().map(|c| c.to_string()).collect());

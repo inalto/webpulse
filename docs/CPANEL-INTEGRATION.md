@@ -118,8 +118,10 @@ accepts both and falls back to `getenv('REMOTE_USER')`, then to
 #ACLS:all
 exec /usr/local/webpulse/bin/webpulse cgi --whm --page --api-url api.cgi
 ```
-`api.cgi` is the same with `exec … cgi --whm --api`. Both locate the binary through `$WEBPULSE_BIN`,
-`/usr/local/webpulse/bin/webpulse`, then `bin/webpulse` next to the script, and print a generic
+`api.cgi` is the same with `exec … cgi --whm --api`. Both locate the binary through `$WEBPULSE_BIN`
+(honoured only when the file and its directory belong to the user running the shim, root under
+cpsrvd, and are not group/other-writable), `/usr/local/webpulse/bin/webpulse`, then `bin/webpulse`
+next to the script, and print a generic
 500 (HTML or JSON) when none exists. cpsrvd's CGI environment (`REMOTE_USER`, `REQUEST_METHOD`,
 `QUERY_STRING`, `CONTENT_TYPE`, `CONTENT_LENGTH`, `HTTP_X_WEBPULSE_REQUEST`, `REMOTE_ADDR`) and the
 request body on stdin are inherited by `exec`.

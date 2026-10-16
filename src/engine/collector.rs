@@ -630,6 +630,7 @@ impl<'a> Collector<'a> {
         }
         let mut sources: Vec<LogSource> = Vec::new();
         let mut resume: Vec<i64> = Vec::new();
+        let account_uid = crate::util::fs::user_id(user);
         for a in archives {
             let key = a.path.display().to_string();
             let prev = done.get(&key);
@@ -640,8 +641,13 @@ impl<'a> Collector<'a> {
                 stats.skipped_files += 1;
                 continue;
             }
-            let mut src = LogSource::new(&a.path, a.https, None, true);
+            let mut src =
+                LogSource::new(&a.path, a.https, None, true).with_account_uid(account_uid);
             if let Err(e) = src.open() {
+                if let Some(u) = e.downcast_ref::<crate::engine::logsource::UntrustedArchive>() {
+                    app.log.warn(format!("skipping archive: {u}"));
+                    continue;
+                }
                 stats.errors += 1;
                 app.log
                     .error(format!("cannot read archive {}: {e}", a.path.display()));
@@ -862,6 +868,9 @@ fn run_merged(
     flush: &mut FlushFn<'_>,
 ) -> Result<Vec<SrcStat>> {
     let n = sources.len();
+    // lines dated more than 15 years ago or more than 2 days ahead are bad lines
+    parser.set_window(app.now());
+    parser.take_out_of_window();
     let mut heads: Vec<Head> = (0..n).map(|_| Head::default()).collect();
     let mut src: Vec<SrcStat> = sources
         .iter()
@@ -967,6 +976,17 @@ fn run_merged(
                 s.ignored = 0;
             }
         }
+    }
+    let out_of_window = parser.take_out_of_window();
+    if out_of_window > 0 {
+        let files: Vec<String> = sources
+            .iter()
+            .map(|s| s.path().display().to_string())
+            .collect();
+        app.log.warn(format!(
+            "{out_of_window} line(s) with a timestamp outside the accepted window (15 years ago to 2 days ahead) counted as bad: {}",
+            files.join(", ")
+        ));
     }
     Ok(src)
 }

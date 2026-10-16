@@ -97,9 +97,37 @@ pub fn peak_rss() -> u64 {
     0
 }
 
-/// Creates `dir` (recursively, with `mode`) when missing and enforces `mode`; when
-/// running as root, ownership is set to `owner`/`group` if they exist.
-pub fn ensure_dir(dir: &Path, mode: u32, owner: Option<&str>, group: Option<&str>) -> Result<()> {
+/// System directories a configured WebPulse directory may never be: creating or
+/// re-moding them would damage the server.
+pub const PROTECTED_DIRS: &[&str] = &[
+    "/", "/etc", "/var", "/var/log", "/usr", "/home", "/root", "/tmp",
+];
+
+/// True when `dir` is (or resolves through symlinks / `..` to) one of [`PROTECTED_DIRS`].
+pub fn is_protected_dir(dir: &Path) -> bool {
+    let lexical = {
+        let s = dir.to_string_lossy();
+        let t = s.trim_end_matches('/');
+        PathBuf::from(if t.is_empty() && s.starts_with('/') {
+            "/"
+        } else {
+            t
+        })
+    };
+    let canon = std::fs::canonicalize(dir).ok();
+    PROTECTED_DIRS.iter().any(|p| {
+        let p = Path::new(p);
+        lexical == p || canon.as_deref() == Some(p)
+    })
+}
+
+fn check_dir_target(dir: &Path) -> Result<()> {
+    if is_protected_dir(dir) {
+        return Err(anyhow!(
+            "refusing to use the system directory {} as a WebPulse directory",
+            dir.display()
+        ));
+    }
     if std::fs::symlink_metadata(dir)
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false)
@@ -109,19 +137,64 @@ pub fn ensure_dir(dir: &Path, mode: u32, owner: Option<&str>, group: Option<&str
             dir.display()
         ));
     }
-    if !dir.is_dir()
-        && std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(mode)
-            .create(dir)
-            .is_err()
+    Ok(())
+}
+
+/// Creates `dir` (recursively) when missing, then gives the new directory `mode` and,
+/// when running as root, `owner`/`group` (if they exist). A directory that already
+/// exists is left exactly as it is (its mode and ownership are the administrator's).
+/// Returns whether the directory was created. Refuses symlinks and the system
+/// directories of [`PROTECTED_DIRS`].
+pub fn ensure_dir(dir: &Path, mode: u32, owner: Option<&str>, group: Option<&str>) -> Result<bool> {
+    check_dir_target(dir)?;
+    if dir.is_dir() {
+        return Ok(false);
+    }
+    if std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(mode)
+        .create(dir)
+        .is_err()
         && !dir.is_dir()
     {
         return Err(anyhow!("cannot create directory {}", dir.display()));
     }
     let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode));
     own(dir, owner, group);
+    Ok(true)
+}
+
+/// Like [`ensure_dir`] but also enforces `mode` and ownership on an existing
+/// directory. Only for directories WebPulse owns outright (the per-account
+/// directories under the data directory), never for a configured path.
+pub fn enforce_dir(dir: &Path, mode: u32, owner: Option<&str>, group: Option<&str>) -> Result<()> {
+    if !ensure_dir(dir, mode, owner, group)? {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode));
+        own(dir, owner, group);
+    }
     Ok(())
+}
+
+/// Creates the empty file `path` with mode 0600 (exclusive, never following a
+/// symlink) so that a database SQLite is about to create is never world-readable,
+/// not even for an instant (SQLite gives its `-journal` the database's mode).
+/// An existing file is left alone. True when the file was created.
+pub fn precreate_private(path: &Path) -> std::io::Result<bool> {
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Ok(_) => {
+            // umask cannot widen 0600, but it could narrow it; make it exact
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// chown/chgrp `path` when root and the principals exist (best effort).

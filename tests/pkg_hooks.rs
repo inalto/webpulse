@@ -207,3 +207,56 @@ fn runall_uses_a_20_minute_timeout() {
         "RunAll hook",
     );
 }
+
+#[test]
+fn runall_ignores_an_untrusted_webpulse_home() {
+    // WEBPULSE_HOME is honoured only when the directory, bin/ and bin/webpulse belong
+    // to the user running the hook (root) and are not group/other-writable
+    use std::os::unix::fs::PermissionsExt;
+    let set_mode = |p: &std::path::Path, m: u32| {
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap()
+    };
+    let home = TmpDir::new("hookuntrusted");
+    let log = home.join("calls.log");
+    script(
+        &home.join("bin/webpulse"),
+        &format!("#!/bin/sh\necho \"$*\" >> '{}'\n", log.display()),
+    );
+    set_mode(&home.path, 0o755);
+    set_mode(&home.join("bin"), 0o755);
+    let run = || {
+        cmd(&[&hook("stats_runall_pre.sh")])
+            .env("WEBPULSE_HOME", &home.path)
+            .stdin(r#"{"context":{},"data":{}}"#)
+            .go()
+    };
+    for (what, path, bad) in [
+        ("group-writable binary", home.join("bin/webpulse"), 0o775),
+        ("other-writable bin/", home.join("bin"), 0o757),
+        ("world-writable home", home.path.clone(), 0o777),
+    ] {
+        let good = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+        set_mode(&path, bad);
+        let (rc, _) = run();
+        assert_eq!(rc, 0, "{what}: always exits 0");
+        assert!(!log.exists(), "{what}: the binary was not run");
+        set_mode(&path, good);
+    }
+    let (rc, _) = run();
+    assert_eq!(rc, 0);
+    assert_eq!(read(&log), "collect --quiet\n", "a trusted home is used");
+}
+
+#[test]
+fn runuser_checks_for_a_symlink_right_before_touch() {
+    let src = read(&repo().join("hooks/stats_runuser_pre.sh"));
+    assert_contains(&src, "[ -L \"$flag\" ] && exit 0", "RunUser hook");
+    assert_contains(
+        &src,
+        "fs.protected_symlinks",
+        "RunUser hook documents the mitigation",
+    );
+    let i = src.find("[ -L \"$flag\" ] && exit 0").unwrap();
+    let j = src.find("touch -- \"$flag\"").unwrap();
+    assert!(i < j, "the check precedes touch");
+}

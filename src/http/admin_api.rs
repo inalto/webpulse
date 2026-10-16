@@ -286,7 +286,12 @@ fn accounts(ctx: &Ctx, r: &Request, p: &Principal) -> R {
     let reg = ctx.registry()?;
     let q = php::mb_substr(php::trim(r.get("q").unwrap_or("")), 100);
     let limit = r.get("limit").map(php::intval).unwrap_or(50).clamp(1, 500);
-    let offset = r.get("offset").map(php::intval).unwrap_or(0).max(0);
+    // clamped like the reports' offset (an absurd value cannot overflow `offset + limit`)
+    let offset = r
+        .get("offset")
+        .map(php::intval)
+        .unwrap_or(0)
+        .clamp(0, 1_000_000);
     let users = scope(ctx, p)?;
 
     let mut accounts = reg.accounts(
@@ -407,7 +412,7 @@ fn accounts(ctx: &Ctx, r: &Request, p: &Principal) -> R {
     Ok(json!({
         "accounts": out,
         "total": total,
-        "has_more": offset + limit < total,
+        "has_more": offset.saturating_add(limit) < total,
         "default_enabled": ctx.cfg_bool("default_enabled", true),
     }))
 }

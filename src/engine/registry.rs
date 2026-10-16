@@ -195,6 +195,11 @@ impl Registry {
         if !fresh && !fs::is_readable(path) {
             return Err(anyhow!("registry {} is not readable", path.display()));
         }
+        if fresh {
+            // 0600 from the first byte (and so is SQLite's -journal, which copies it)
+            fs::precreate_private(path)
+                .map_err(|e| anyhow!("cannot create registry {}: {e}", path.display()))?;
+        }
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_millis(5000))?;
         conn.set_prepared_statement_cache_capacity(32);
@@ -656,6 +661,19 @@ impl Registry {
                 };
                 Ok([g(0)?, g(1)?, g(2)?, g(3)?])
             })?)
+        };
+        // an aggregate that overflows 64 bits (forged counters only) counts as 0
+        let sum = |from: &str| -> Result<[i64; 4]> {
+            match sum(from) {
+                Err(e) if crate::reports::domain_data::is_integer_overflow(&e) => {
+                    eprintln!(
+                        "webpulse: warning: integer overflow summarising {}; treated as 0",
+                        store.path().display()
+                    );
+                    Ok([0; 4])
+                }
+                r => r,
+            }
         };
         let t = sum(&today)?;
         let w = sum(&d7)?;

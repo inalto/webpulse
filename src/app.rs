@@ -66,6 +66,52 @@ pub fn config_path_for(global: &Global) -> (PathBuf, bool) {
     }
 }
 
+/// True when `path` is the production configuration file `/etc/webpulse/config.json`,
+/// compared after resolving symlinks and `..` on both sides (a path that cannot be
+/// resolved is compared as given).
+pub fn is_production_config(path: &Path) -> bool {
+    let prod = Path::new(DEFAULT_CONFIG_PATH);
+    path == prod || resolve_path(path) == resolve_path(prod)
+}
+
+/// Resolves symlinks and `.`/`..` like `realpath -m`: a dangling symlink is followed
+/// through its target (up to 40 hops), then the longest existing prefix is
+/// canonicalized and the missing remainder is appended lexically.
+fn resolve_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut p = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(path)
+    };
+    for _ in 0..40 {
+        if let Ok(c) = std::fs::canonicalize(&p) {
+            return c;
+        }
+        match std::fs::read_link(&p) {
+            Ok(target) => p = p.parent().map(|d| d.join(&target)).unwrap_or(target),
+            Err(_) => break,
+        }
+    }
+    let comps: Vec<Component<'_>> = p.components().collect();
+    for i in (1..=comps.len()).rev() {
+        let prefix: PathBuf = comps[..i].iter().collect();
+        if let Ok(mut r) = std::fs::canonicalize(&prefix) {
+            for c in &comps[i..] {
+                match c {
+                    Component::ParentDir => {
+                        r.pop();
+                    }
+                    Component::CurDir => {}
+                    other => r.push(other.as_os_str()),
+                }
+            }
+            return r;
+        }
+    }
+    p
+}
+
 impl App {
     /// Boots from `--config`, else `WEBPULSE_CONFIG`, else `/etc/webpulse/config.json`.
     /// Never fails because of the config file (defaults apply; see `Config::load_error`).
@@ -107,6 +153,16 @@ impl App {
         log.set_verbose(global.verbose);
         if let Some(e) = config.load_error() {
             log.debug(format!("config: {e} (using defaults)"));
+        }
+        // WEBPULSE_NOW (test clock) is ignored for root on the production configuration
+        let root = crate::util::fs::is_root();
+        let allow_now = crate::util::time::fake_clock_policy(root, is_production_config(&path));
+        crate::util::time::set_fake_clock_allowed(allow_now);
+        if root && allow_now && std::env::var_os("WEBPULSE_NOW").is_some_and(|v| !v.is_empty()) {
+            log.warn(format!(
+                "WEBPULSE_NOW is set: running as root with a frozen clock (config {})",
+                path.display()
+            ));
         }
         App {
             config,

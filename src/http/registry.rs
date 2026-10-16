@@ -99,18 +99,18 @@ impl Registry {
         if let Some(dir) = path.parent()
             && !dir.is_dir()
         {
-            std::fs::create_dir_all(dir)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o711));
-            }
+            crate::util::fs::ensure_dir(dir, 0o711, None, None)?;
         }
         let fresh = !path.is_file();
         if !fresh && !access(path, libc::R_OK) {
             anyhow::bail!("registry {} is not readable", path.display());
         }
         let writable = fresh || access(path, libc::W_OK);
+        if fresh {
+            // 0600 from the first byte (and so is SQLite's -journal, which copies it)
+            crate::util::fs::precreate_private(path)
+                .map_err(|e| anyhow::anyhow!("cannot create registry {}: {e}", path.display()))?;
+        }
         let flags = if writable {
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE

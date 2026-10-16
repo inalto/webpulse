@@ -213,7 +213,10 @@ http_get() {
             ;;
     esac
     if have curl; then
-        HTTP_CODE=$(curl -sSL --retry 3 --connect-timeout 15 -o "$dest" -w '%{http_code}' "$url" 2>/dev/null) || HTTP_CODE=${HTTP_CODE:-000}
+        # an https:// URL (every GitHub URL) must stay https:// through every redirect
+        local proto=()
+        case "$url" in https://*) proto=(--proto '=https' --proto-redir '=https') ;; esac
+        HTTP_CODE=$(curl -sSL ${proto[@]+"${proto[@]}"} --retry 3 --connect-timeout 15 -o "$dest" -w '%{http_code}' "$url" 2>/dev/null) || HTTP_CODE=${HTTP_CODE:-000}
         case "$HTTP_CODE" in 2??) return 0 ;; esac
         rm -f "$dest"
         return 1
@@ -264,7 +267,7 @@ latest_tag() {
     fi
     if [ -z "$tag" ] && have curl; then
         # no API access (rate limit, proxy): the web redirect of /releases/latest names the tag
-        tag=$(curl -sIL --connect-timeout 15 -o /dev/null -w '%{url_effective}' \
+        tag=$(curl -sIL --proto '=https' --proto-redir '=https' --connect-timeout 15 -o /dev/null -w '%{url_effective}' \
             "https://github.com/${WP_REPO}/releases/latest" 2>/dev/null || true)
         tag=${tag##*/tag/}
         case "$tag" in */*|*[!A-Za-z0-9._+-]*) tag='' ;; esac
@@ -275,8 +278,17 @@ latest_tag() {
 # Extract tarball $1 into $2 (stripping the top-level directory) and refuse odd archives.
 extract_tarball() {
     local tarball=$1 dest=$2
-    if tar -tzf "$tarball" 2>/dev/null | grep -Eq '(^|/)\.\.(/|$)|^/'; then
+    # listings are captured first: `tar | grep -q` would race with pipefail (SIGPIPE)
+    local names verbose
+    names=$(tar -tzf "$tarball" 2>/dev/null) || fail "The downloaded file is not a valid tar.gz archive."
+    verbose=$(tar -tvzf "$tarball" 2>/dev/null) || fail "The downloaded file is not a valid tar.gz archive."
+    if grep -Eq '(^|/)\.\.(/|$)|^/' <<<"$names"; then
         fail "The archive contains unsafe paths; refusing to unpack it."
+    fi
+    # no symlinks or hard links: WebPulse archives contain only files and directories,
+    # and a link could make a later entry land outside the destination
+    if grep -q '^[lh]' <<<"$verbose"; then
+        fail "The archive contains symbolic or hard links; refusing to unpack it."
     fi
     mkdir -p "$dest"
     tar -xzf "$tarball" -C "$dest" --strip-components=1 --no-same-owner 2>/dev/null \
@@ -315,9 +327,16 @@ cargo_build() {
     WP_BIN_SRC="$dir/target/release/webpulse"
 }
 
-# Source tarball of ${WP_REPO}@${WP_REF} -> $TMP_DIR/src (SRC). No binary yet.
+# Source tarball of ${WP_REPO}@<ref> -> $TMP_DIR/src (SRC). No binary yet. <ref> is $1,
+# default $WP_REF; a release tag (vX.Y.Z) is fetched as refs/tags/<tag>, so a branch
+# of the same name can never be built instead.
 fetch_source_tarball() {
-    local url="${WEBPULSE_SOURCE_URL:-https://codeload.github.com/${WP_REPO}/tar.gz/${WP_REF}}"
+    local ref=${1:-$WP_REF} path
+    case "$ref" in
+        v[0-9]*) path="refs/tags/$ref" ;;
+        *) path=$ref ;;
+    esac
+    local url="${WEBPULSE_SOURCE_URL:-https://codeload.github.com/${WP_REPO}/tar.gz/${path}}"
     printf 'Downloading source %s\n' "$url"
     http_get "$url" "$TMP_DIR/source.tar.gz" || fail "Download failed: $url"
     extract_tarball "$TMP_DIR/source.tar.gz" "$TMP_DIR/src"
@@ -330,6 +349,7 @@ fetch_source_tarball() {
 fetch_release() {
     local tag='' ver url sha_url expected actual
     WP_FETCH_WHY=''
+    WP_RELEASE_TAG=''
     if [ -n "${WEBPULSE_DOWNLOAD_URL:-}" ]; then
         url=$WEBPULSE_DOWNLOAD_URL
         sha_url="$url.sha256"
@@ -345,6 +365,7 @@ fetch_release() {
             WP_FETCH_WHY="no release of ${WP_REPO} could be found"
             return 1
         fi
+        WP_RELEASE_TAG=$tag
         ver=${tag#v}
         url="https://github.com/${WP_REPO}/releases/download/${tag}/webpulse-${ver}-${WP_TARGET}.tar.gz"
         sha_url="$url.sha256"
@@ -405,9 +426,17 @@ fetch_source() {
     fi
     printf 'No prebuilt binary: %s.\n' "$WP_FETCH_WHY"
     if find_cargo; then
-        printf 'cargo found: falling back to a build from source (ref %s).\n' "$WP_REF"
         rm -rf "$TMP_DIR/src"
-        fetch_source_tarball
+        if [ -n "${WP_RELEASE_TAG:-}" ]; then
+            # the release exists but has no asset for this machine: build THAT release's
+            # source, never the development branch
+            printf 'cargo found: falling back to a build from source of release %s (not %s).\n' \
+                "$WP_RELEASE_TAG" "$WP_REF"
+            fetch_source_tarball "$WP_RELEASE_TAG"
+        else
+            printf 'cargo found: falling back to a build from source (ref %s).\n' "$WP_REF"
+            fetch_source_tarball
+        fi
         cargo_build "$SRC"
         return 0
     fi

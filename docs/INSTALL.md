@@ -19,7 +19,8 @@ curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | b
 
 The script is only a loader: it works out which release to install (`--ref`, default *the latest
 release*), downloads the tarball for this CPU, verifies its checksum and runs the installer library
-inside it. From an unpacked release tarball the same script installs the files it sits next to:
+inside it. GitHub downloads are https-only, redirects included (`curl --proto =https --proto-redir =https`),
+and an archive containing symbolic or hard links is refused before it is unpacked. From an unpacked release tarball the same script installs the files it sits next to:
 `sudo ./install.sh`.
 
 | Flag                  | Meaning |
@@ -48,8 +49,9 @@ inside it. From an unpacked release tarball the same script installs the files i
    `https://api.github.com/repos/<repo>/releases/latest`), downloads
    `https://github.com/<repo>/releases/download/<tag>/webpulse-<version>-<target>.tar.gz` and the
    matching `.sha256`, **verifies the sha256** (a mismatch aborts before anything is changed) and unpacks it.
-   If the release has no asset for this ref/architecture: with `cargo` it downloads the source tarball and
-   builds it (as `--build` does), without `cargo` it stops and tells you the three ways out (a
+   If the release has no asset for this ref/architecture: with `cargo` it downloads the source tarball of
+   **that same release tag** (`codeload.github.com/<repo>/tar.gz/refs/tags/<tag>`, never the development
+   branch) and builds it (as `--build` does), without `cargo` it stops and tells you the three ways out (a
    released `--ref`, `--build`, `--binary`).
 3. Copies the release to `/usr/local/webpulse-releases/<version>/` (`bin/webpulse` mode 0755 root),
    checks that the binary runs on this machine (`webpulse --version`) and runs `bin/webpulse setup`
@@ -107,6 +109,25 @@ Each release also carries the source tarball `webpulse-<version>.tar.gz` (`scrip
 `/usr/local/webpulse-releases/<version>/`, so `/usr/local/webpulse/install.sh` and `uninstall.sh` are
 always available.
 
+### Verifying build provenance
+
+The release workflow attests every tarball it publishes (the two binary tarballs and the source
+tarball) with [GitHub artifact attestations](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)
+(SLSA build provenance, signed through Sigstore with the workflow's OIDC identity). The checksum only
+proves the download is intact; the attestation proves it was built by this repository's `Release`
+workflow from the tagged commit. With the GitHub CLI (2.49 or newer):
+
+```bash
+gh attestation verify webpulse-<version>-x86_64-unknown-linux-musl.tar.gz --repo inalto/webpulse
+# stricter: also pin the workflow that must have produced it
+gh attestation verify webpulse-<version>-x86_64-unknown-linux-musl.tar.gz --repo inalto/webpulse \
+    --signer-workflow inalto/webpulse/.github/workflows/release.yml
+```
+
+A tarball that fails verification (or has no attestation) did not come from the release workflow: do
+not install it. The release workflow itself has a read-only token except for the final publish job, pins
+every third-party action to a commit SHA and uses no build cache.
+
 ## Building from source
 
 Needs the Rust toolchain (`cargo`, [rustup.rs](https://rustup.rs); stable, edition 2024) and a C compiler
@@ -135,7 +156,8 @@ glibc: use the musl build for other servers.
 ## Air-gapped installation
 
 On a machine with internet access download `webpulse-<version>-<arch>-unknown-linux-musl.tar.gz` and its
-`.sha256` from the GitHub release, check `sha256sum -c`, copy the tarball to the server and:
+`.sha256` from the GitHub release, check `sha256sum -c` (and, optionally, `gh attestation verify`, see
+[Verifying build provenance](#verifying-build-provenance)), copy the tarball to the server and:
 
 ```bash
 tar -xzf webpulse-<version>-x86_64-unknown-linux-musl.tar.gz

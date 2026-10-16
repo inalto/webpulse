@@ -403,17 +403,40 @@ fn is_protocol(p: &[u8]) -> bool {
         && (l == 6 || (p[6] == b'.' && p[7].is_ascii_digit()))
 }
 
+/// Largest response size accepted on one line (1 TiB): anything above is a forged or
+/// corrupt line, and summing such values would overflow the 64-bit counters.
+pub const MAX_BYTES: i64 = 1 << 40;
+/// Accepted numeric HTTP statuses (`-` is still accepted, as status 0).
+pub const STATUS_RANGE: std::ops::RangeInclusive<i64> = 100..=999;
+/// Timestamps older than this many seconds before "now" are rejected (15 years).
+pub const MAX_PAST: i64 = 15 * 366 * 86400;
+/// Timestamps further than this many seconds after "now" are rejected (2 days).
+pub const MAX_FUTURE: i64 = 2 * 86400;
+
 /// The parser (holds small date caches).
 #[derive(Debug, Default)]
 pub struct LogParser {
     day_cache: HashMap<[u8; 11], Option<i64>>,
     last: Option<([u8; 20], [u8; 5], Option<i64>)>,
+    window: Option<(i64, i64)>,
+    out_of_window: u64,
 }
 
 impl LogParser {
-    /// A new parser.
+    /// A new parser (no time window: every valid date is accepted).
     pub fn new() -> LogParser {
         LogParser::default()
+    }
+
+    /// Accepts only timestamps within `now - 15 years ..= now + 2 days`; lines outside
+    /// are bad lines, counted by [`LogParser::take_out_of_window`].
+    pub fn set_window(&mut self, now: i64) {
+        self.window = Some((now.saturating_sub(MAX_PAST), now.saturating_add(MAX_FUTURE)));
+    }
+
+    /// Lines rejected for their timestamp since the last call (and resets the count).
+    pub fn take_out_of_window(&mut self) -> u64 {
+        std::mem::take(&mut self.out_of_window)
     }
 
     fn timestamp(&mut self, t: &[u8], z: &[u8]) -> Option<i64> {
@@ -487,21 +510,36 @@ impl LogParser {
             .or_else(|| try_match(line, false, true))
             .or_else(|| try_match(line, false, false))?;
         let ts = self.timestamp(&line[raw.time..raw.time + 20], &line[raw.tz..raw.tz + 5])?;
+        if let Some((lo, hi)) = self.window
+            && !(lo..=hi).contains(&ts)
+        {
+            self.out_of_window += 1;
+            return None;
+        }
+        let status = if line[raw.status.0] == b'-' {
+            0
+        } else {
+            let v = digits_to_i64(&line[raw.status.0..raw.status.1]);
+            if !STATUS_RANGE.contains(&v) {
+                return None;
+            }
+            v
+        };
+        let bytes = if line[raw.bytes.0] == b'-' {
+            0
+        } else {
+            digits_to_i64(&line[raw.bytes.0..raw.bytes.1])
+        };
+        if bytes > MAX_BYTES {
+            return None;
+        }
         let mut h = HitRef {
             ip: Span::line(raw.ip.0, raw.ip.1),
             vhost: raw.vhost.map(|v| Span::line(v.0, v.1)),
             ts,
             offset: offset_seconds(&line[raw.tz..raw.tz + 5]),
-            status: if line[raw.status.0] == b'-' {
-                0
-            } else {
-                digits_to_i64(&line[raw.status.0..raw.status.1])
-            },
-            bytes: if line[raw.bytes.0] == b'-' {
-                0
-            } else {
-                digits_to_i64(&line[raw.bytes.0..raw.bytes.1])
-            },
+            status,
+            bytes,
             ..HitRef::default()
         };
         // request line, possibly unescaped into scratch

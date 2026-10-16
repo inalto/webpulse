@@ -273,22 +273,24 @@ impl Counters {
 
     /// Adds `n` to a daily column.
     pub fn day(&mut self, day: &str, field: usize, n: i64) {
-        self.slot(day).daily[field] += n;
+        let c = &mut self.slot(day).daily[field];
+        *c = c.saturating_add(n);
     }
 
     /// Adds `n` to an hourly column.
     pub fn hour(&mut self, day: &str, hour: u32, field: usize, n: i64) {
-        self.slot(day).hourly[(hour as usize).min(23)][field] += n;
+        let c = &mut self.slot(day).hourly[(hour as usize).min(23)][field];
+        *c = c.saturating_add(n);
     }
 
     /// Adds `n` to column `col` (V, PV, H, B, BO, DU) of a dim row.
     pub fn dim(&mut self, day: &str, dim: usize, key: &str, col: usize, n: i64) {
         let m = &mut self.slot(day).dims[dim];
         match m.get_mut(key) {
-            Some(r) => r[col] += n,
+            Some(r) => r[col] = r[col].saturating_add(n),
             None => {
                 let mut r = [0i64; 6];
-                r[col] += n;
+                r[col] = n;
                 m.insert(key.into(), r);
             }
         }
@@ -299,8 +301,8 @@ impl Counters {
         let m = &mut self.slot(day).dims[dim];
         match m.get_mut(key) {
             Some(r) => {
-                r[H] += 1;
-                r[B] += bytes;
+                r[H] = r[H].saturating_add(1);
+                r[B] = r[B].saturating_add(bytes);
             }
             None => {
                 let mut r = [0i64; 6];

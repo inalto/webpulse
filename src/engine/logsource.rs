@@ -12,12 +12,19 @@
 //! `\n` is left for the next run. [`LogSource::offset`] only advances over lines
 //! handed out, so the caller stores it after its own transaction commits. Files are
 //! opened non-blocking and must be regular files (a FIFO cannot hang the collector);
-//! archives must also keep the device/inode seen by `lstat()`. Archives are
+//! archives must also keep the device/inode seen by `lstat()`. Archives live in a
+//! user-writable directory, so they are opened relative to a descriptor of that
+//! directory (`O_DIRECTORY|O_NOFOLLOW`, then `openat(O_NOFOLLOW)`) and, as root, the
+//! directory and the file must belong to the account or to root (a root-owned file
+//! must not be hard-linked): see [`UntrustedArchive`]. Archives are
 //! decompressed in 8 KiB input slices with 1 MiB output reads, so a decompression
 //! bomb stays in bounded memory.
 
+use std::ffi::CString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
@@ -35,6 +42,115 @@ pub const FINGERPRINT_BYTES: u64 = 256;
 pub const MAX_LINE: usize = 65536;
 /// Compressed bytes handed to the inflater at a time.
 pub const INFLATE_SLICE: usize = 8192;
+
+/// An archive that failed the open-time ownership/type checks (it is skipped with a
+/// warning, not counted as a read error).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UntrustedArchive(pub String);
+
+impl std::fmt::Display for UntrustedArchive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for UntrustedArchive {}
+
+fn untrusted(msg: String) -> anyhow::Error {
+    anyhow::Error::new(UntrustedArchive(msg))
+}
+
+/// Opens an archive without following symlinks anywhere in its last two components
+/// and re-checks what was opened. `account_uid` is the uid of the account the archive
+/// belongs to; the ownership checks apply only when running as root (`root`). Returns
+/// the file and its `fstat()`.
+pub fn open_archive(
+    path: &Path,
+    account_uid: Option<u32>,
+    root: bool,
+) -> Result<(File, std::fs::Metadata)> {
+    let p = path.display().to_string();
+    let name = path.file_name().ok_or_else(|| anyhow!("cannot open {p}"))?;
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    let cdir = CString::new(dir.as_os_str().as_bytes()).map_err(|_| anyhow!("cannot open {p}"))?;
+    let cname = CString::new(name.as_bytes()).map_err(|_| anyhow!("cannot open {p}"))?;
+    // SAFETY: cdir is a valid NUL-terminated string; the result is checked.
+    let dfd = unsafe {
+        libc::open(
+            cdir.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if dfd < 0 {
+        return Err(untrusted(format!(
+            "{p}: the archive directory is not a directory (or is a symlink)"
+        )));
+    }
+    // SAFETY: dfd is a fresh descriptor we own.
+    let dir_file = File::from(unsafe { OwnedFd::from_raw_fd(dfd) });
+    let dst = dir_file
+        .metadata()
+        .map_err(|_| anyhow!("cannot stat the directory of {p}"))?;
+    let owner_ok = |uid: u32| uid == 0 || account_uid.is_none_or(|a| a == uid);
+    if root && !owner_ok(dst.uid()) {
+        return Err(untrusted(format!(
+            "{p}: the archive directory belongs to uid {}",
+            dst.uid()
+        )));
+    }
+    // lstat() through the directory descriptor (continuity check below)
+    let mut lst: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: valid descriptor, NUL-terminated name and out-pointer.
+    let rc = unsafe {
+        libc::fstatat(
+            dir_file.as_raw_fd(),
+            cname.as_ptr(),
+            &mut lst,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if rc != 0 {
+        return Err(anyhow!("cannot stat {p}"));
+    }
+    if lst.st_mode & libc::S_IFMT != libc::S_IFREG {
+        return Err(untrusted(format!("{p} is not a regular file")));
+    }
+    // SAFETY: valid descriptor and NUL-terminated name; the result is checked.
+    let fd = unsafe {
+        libc::openat(
+            dir_file.as_raw_fd(),
+            cname.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(anyhow!("cannot open {p}"));
+    }
+    // SAFETY: fd is a fresh descriptor we own.
+    let f = File::from(unsafe { OwnedFd::from_raw_fd(fd) });
+    let st = f
+        .metadata()
+        .map_err(|_| anyhow!("{p} is not a regular file"))?;
+    if !st.file_type().is_file() {
+        return Err(untrusted(format!("{p} is not a regular file")));
+    }
+    if st.ino() != lst.st_ino as u64 || st.dev() != lst.st_dev as u64 {
+        return Err(anyhow!("{p} changed while opening"));
+    }
+    if root && !owner_ok(st.uid()) {
+        return Err(untrusted(format!("{p} belongs to uid {}", st.uid())));
+    }
+    if root && st.uid() == 0 && st.nlink() != 1 {
+        return Err(untrusted(format!(
+            "{p} is owned by root and has {} hard links",
+            st.nlink()
+        )));
+    }
+    Ok((f, st))
+}
 
 /// The stored checkpoint of a live log (`checkpoints` row).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -146,6 +262,7 @@ pub struct LogSource {
     size: u64,
     mtime: i64,
     reset_reason: Option<&'static str>,
+    account_uid: Option<u32>,
 }
 
 impl std::fmt::Debug for LogSource {
@@ -181,7 +298,14 @@ impl LogSource {
             size: 0,
             mtime: 0,
             reset_reason: None,
+            account_uid: None,
         }
+    }
+
+    /// uid of the account an archive belongs to (checked at open time when root).
+    pub fn with_account_uid(mut self, uid: Option<u32>) -> LogSource {
+        self.account_uid = uid;
+        self
     }
 
     /// Path as discovered.
@@ -200,20 +324,19 @@ impl LogSource {
     /// Opens the file and positions it according to the checkpoint.
     pub fn open(&mut self) -> Result<()> {
         let p = self.path.display().to_string();
-        let lst = std::fs::symlink_metadata(&self.path).map_err(|_| anyhow!("cannot stat {p}"))?;
-        if self.gzip && !lst.file_type().is_file() {
-            return Err(anyhow!("{p} is not a regular file"));
-        }
-        let f = fs::open_nonblocking(&self.path).map_err(|_| anyhow!("cannot open {p}"))?;
-        let st = f
-            .metadata()
-            .map_err(|_| anyhow!("{p} is not a regular file"))?;
-        if !st.file_type().is_file() {
-            return Err(anyhow!("{p} is not a regular file"));
-        }
-        if self.gzip && (st.ino() != lst.ino() || st.dev() != lst.dev()) {
-            return Err(anyhow!("{p} changed while opening"));
-        }
+        let (f, st) = if self.gzip {
+            open_archive(&self.path, self.account_uid, fs::is_root())?
+        } else {
+            std::fs::symlink_metadata(&self.path).map_err(|_| anyhow!("cannot stat {p}"))?;
+            let f = fs::open_nonblocking(&self.path).map_err(|_| anyhow!("cannot open {p}"))?;
+            let st = f
+                .metadata()
+                .map_err(|_| anyhow!("{p} is not a regular file"))?;
+            if !st.file_type().is_file() {
+                return Err(anyhow!("{p} is not a regular file"));
+            }
+            (f, st)
+        };
         self.inode = st.ino();
         self.size = st.len();
         self.mtime = st.mtime();

@@ -577,8 +577,8 @@ impl Sessionizer {
         if ts > v.last {
             v.last = ts;
         }
-        v.hits += 1;
-        v.bytes += bytes;
+        v.hits = v.hits.saturating_add(1);
+        v.bytes = v.bytes.saturating_add(bytes);
         v.dirty = true;
         if is_pageview {
             Sessionizer::pageview(c, v, ts, day, key);

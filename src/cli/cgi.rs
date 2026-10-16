@@ -12,15 +12,16 @@
 //!   reseller owning at least one account, else 403); refuses euid ≠ 0.
 //!
 //! Development/test escape hatch: with `WEBPULSE_CGI_TESTING=1`, a
-//! non-default configuration (`--config` / `WEBPULSE_CONFIG`) and a non-root
-//! euid, the uid checks are skipped (the OS permissions on the data remain
+//! non-default configuration (`--config` / `WEBPULSE_CONFIG`; compared with
+//! `/etc/webpulse/config.json` after resolving symlinks on both sides) and a
+//! non-root euid, the uid checks are skipped (the OS permissions on the data remain
 //! the real boundary; the production shims use the default configuration).
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use crate::app::{App, DEFAULT_CONFIG_PATH};
+use crate::app::App;
 use crate::error::{Result, WpError};
 use crate::http::page::{self, PageOptions, html_escape};
 use crate::http::{Ctx, Principal, Request, Response, api, cpanel};
@@ -113,13 +114,18 @@ fn uid_of(name: &str) -> Option<u32> {
 }
 
 fn testing(app: &App) -> bool {
-    std::env::var("WEBPULSE_CGI_TESTING")
-        .map(|v| v == "1")
-        .unwrap_or(false)
-        && euid() != 0
-        && app
-            .config_path()
-            .is_some_and(|p| p != std::path::Path::new(DEFAULT_CONFIG_PATH))
+    testing_allowed(
+        std::env::var("WEBPULSE_CGI_TESTING").ok().as_deref(),
+        euid() == 0,
+        app.config_path(),
+    )
+}
+
+/// Policy of the `WEBPULSE_CGI_TESTING` escape hatch: the flag is `1`, the process
+/// is not root and the configuration is not the production file (compared after
+/// resolving symlinks, see [`crate::app::is_production_config`]).
+pub fn testing_allowed(flag: Option<&str>, root: bool, config: Option<&std::path::Path>) -> bool {
+    flag == Some("1") && !root && config.is_some_and(|p| !crate::app::is_production_config(p))
 }
 
 fn denied_page(status: u16, title: &str, message: &str) -> Response {
