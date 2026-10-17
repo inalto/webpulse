@@ -41,6 +41,9 @@ The Audience tab and the Countries card show a ranked list with flags and bars. 
 
 ## Standalone mode
 
+
+**Planned (see `docs/STANDALONE-COCKPIT.md` in the repository):** a full standalone mode for plain AlmaLinux/RHEL/Debian web servers (site discovery from Apache and Nginx configuration or an explicit `sites` list, logrotate-aware tailing, cron-only, `serve --listen` with a persistent token) and a **Cockpit module** that shows the same dashboard inside Cockpit using the existing `webpulse cgi` entry point through Cockpit's process bridge, with Cockpit handling login and administrative access.
+
 `install.sh --standalone` exists, but it only installs the command line program and the development
 server, without plugins, hooks or cron, as described in [[Development]]. A supported mode in which
 WebPulse runs on a server without cPanel, with its own scheduling and its own way to give people access,
