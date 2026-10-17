@@ -36,7 +36,12 @@ pub const USAGE: &str =
 
 Writes deterministic combined-format logs for the fixture domains (example.com
 and shop.example.com of alice, blog.net of bob) into a fake server root and
-prints a JSON summary. --single FILE writes example.com traffic only to FILE.";
+prints a JSON summary. --single FILE writes example.com traffic only to FILE.
+
+       webpulse dev run-upgrade --job ID --tag vX.Y.Z [--repo OWNER/NAME]
+
+Runs install.sh --update --ref TAG of this installation (started by WHM's
+one-click upgrade) and finishes registry job ID with its exit status.";
 
 /// Options.
 pub const SPEC: &[(&str, Kind)] = &[
@@ -49,6 +54,9 @@ pub const SPEC: &[(&str, Kind)] = &[
     ("no-archive", Kind::Flag),
     ("single", Kind::Value),
     ("max-ts", Kind::Value),
+    ("job", Kind::Value),
+    ("tag", Kind::Value),
+    ("repo", Kind::Value),
 ];
 
 /// Arguments (clap description).
@@ -994,6 +1002,7 @@ pub fn generate(o: &GenOptions) -> Result<Value> {
 pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
     match raw.arg(0) {
         Some("gen-logs") => {}
+        Some("run-upgrade") => return super::update_check::run_upgrade(ctx, raw),
         other => {
             return Err(super::usage(match other {
                 Some(t) => format!("unknown dev tool '{t}'"),

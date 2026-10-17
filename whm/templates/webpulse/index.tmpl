@@ -1,0 +1,11 @@
+[%#
+  WebPulse Analytics - WHM page template (installed in
+  /usr/local/cpanel/whostmgr/docroot/templates/webpulse/index.tmpl).
+  whm/cgi/index.cgi renders it with Cpanel::Template::process_template('whostmgr', ...):
+  WHM's master template draws the top bar, the left navigation (app_key highlights the
+  WebPulse entry) and the breadcrumbs; data.body is the dashboard fragment printed by
+  `webpulse cgi --whm --page --embedded` (our own markup: not escaped on purpose).
+-%]
+[% WRAPPER 'master_templates/master.tmpl' theme="bootstrap" header="WebPulse Analytics" app_key='webpulse' include_legacy_stylesheets=0 -%]
+[% data.body %]
+[%- END %]

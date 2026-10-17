@@ -66,7 +66,9 @@ and an archive containing symbolic or hard links is refused before it is unpacke
    ```
    It also looks for cPanel's PHP (`/usr/local/cpanel/3rdparty/bin/php`, then `php`) and only warns when
    there is none: the cPanel page runs on it.
-6. Copies the CGI shims to `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/`, the icon to
+6. Copies the WHM CGIs to `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/` (`index.cgi`, Perl, and
+   `api.cgi`, bash), the page template to `/usr/local/cpanel/whostmgr/docroot/templates/webpulse/index.tmpl`
+   (it puts the dashboard inside WHM's top bar and left navigation), the icon to
    `.../addon_plugins/webpulse.png` and registers the WHM entry:
    ```
    /usr/local/cpanel/bin/register_appconfig /usr/local/webpulse/whm/webpulse.conf
@@ -176,7 +178,7 @@ The installer finds `bin/webpulse` next to itself and downloads nothing. To use 
 | Config | `/etc/webpulse/config.json` (0600) |
 | Statistics | `/var/webpulse/` (`webpulse.db`, `data/<user>/<domain>.db`, `geoip/`, `log/`, `run/`) |
 | cPanel plugin | `/usr/local/cpanel/base/frontend/jupiter/webpulse/` (PHP shims) |
-| WHM plugin | `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/` (bash shims), `.../addon_plugins/webpulse.png`, `/var/cpanel/apps/webpulse.conf` |
+| WHM plugin | `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/` (`index.cgi` Perl, `api.cgi` bash), `/usr/local/cpanel/whostmgr/docroot/templates/webpulse/index.tmpl`, `.../addon_plugins/webpulse.png`, `/var/cpanel/apps/webpulse.conf` |
 | Cron | `/etc/cron.d/webpulse` |
 
 ## Manual installation
@@ -213,6 +215,8 @@ cp -a /usr/local/webpulse/cpanel/plugin/. /var/cpanel/plugins/webpulse/   # inst
 mkdir -p /usr/local/cpanel/whostmgr/docroot/cgi/webpulse
 install -m 755 /usr/local/webpulse/whm/cgi/*.cgi /usr/local/cpanel/whostmgr/docroot/cgi/webpulse/
 install -m 644 /usr/local/webpulse/whm/addon_plugins/webpulse.png /usr/local/cpanel/whostmgr/docroot/addon_plugins/
+install -d -m 755 /usr/local/cpanel/whostmgr/docroot/templates/webpulse
+install -m 644 /usr/local/webpulse/whm/templates/webpulse/index.tmpl /usr/local/cpanel/whostmgr/docroot/templates/webpulse/
 /usr/local/cpanel/bin/register_appconfig /usr/local/webpulse/whm/webpulse.conf
 
 # 4. hooks and cron
@@ -226,6 +230,17 @@ install -m 644 /usr/local/webpulse/etc/cron.d/webpulse /etc/cron.d/webpulse
 ```
 
 ## Update
+
+**From WHM (one click).** Every night the rollup asks the GitHub API for the latest release (at most
+once every 20 hours; `webpulse update-check` does it by hand). When a newer version exists, the bell in
+the WebPulse header shows a dot; open it (or the **Updates** card in the Server view) and choose
+**Upgrade now**. The server runs `/usr/local/webpulse/install.sh --update --ref <tag> -y` in the
+background as a job of type `upgrade` (its output goes to `/var/webpulse/log/upgrade.log`); the WHM
+pages stay available, and the page reloads by itself when the job is done. Only root can upgrade;
+resellers see the notice only. Turn the nightly check off with
+`webpulse config set update.check false` (`update.repo` in `config.json` points it at a fork).
+
+**From the shell:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | bash -s -- --update

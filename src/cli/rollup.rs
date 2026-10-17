@@ -20,7 +20,8 @@ pub const USAGE: &str = "Usage: webpulse rollup [--user USER [--domain DOMAIN]] 
 Closes stale visits, folds the tail of high-cardinality dimensions into
 \"(other)\" (max_rows_per_dim per day), purges raw visits/events older than
 raw_retention_days, prunes visitor_day and salts, refreshes the WHM summary,
-runs PRAGMA optimize and VACUUM when more than 25 % of the pages are free.";
+runs PRAGMA optimize and VACUUM when more than 25 % of the pages are free.
+A full rollup also checks for a newer WebPulse release (update.check).";
 
 /// Options.
 pub const SPEC: &[(&str, Kind)] = &[
@@ -167,6 +168,10 @@ pub fn run(ctx: &Ctx, raw: &RawArgs, args: &Args) -> Result<i32> {
         msg.as_deref(),
         true,
     );
+    // nightly update notification (never fails the rollup)
+    if args.user.is_none() {
+        super::update_check::nightly(app);
+    }
     let text = format!(
         "rollup of {} domain(s): {} visit(s) closed, {} row(s) folded, {} visit(s) and {} event(s) purged, {} vacuum(s), {} error(s) in {:.2}s",
         g("domains"),

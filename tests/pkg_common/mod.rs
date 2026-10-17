@@ -455,6 +455,7 @@ impl Sandbox {
             "base/frontend/jupiter",
             "whostmgr/docroot/cgi",
             "whostmgr/docroot/addon_plugins",
+            "whostmgr/docroot/templates",
         ] {
             std::fs::create_dir_all(c.join(d)).unwrap();
         }

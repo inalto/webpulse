@@ -1455,3 +1455,406 @@ fn reports_survive_counters_that_overflow_an_sql_sum() {
         assert_eq!(r.status, 200, "{query:?}: {}", r.body);
     }
 }
+
+// ------------------------------------------------------------------ updates
+
+/// A tiny HTTP server answering every request with `body` (the fake GitHub
+/// `releases/latest`); returns its URL and the number of requests served.
+fn fake_github(body: &str) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read, Write};
+    use std::sync::atomic::Ordering;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "http://127.0.0.1:{}/repos/inalto/webpulse/releases/latest",
+        listener.local_addr().unwrap().port()
+    );
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (h, body) = (hits.clone(), body.to_string());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match s.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let req = String::from_utf8_lossy(&buf).to_ascii_lowercase();
+            assert!(req.contains("user-agent: webpulse/"), "User-Agent: {req}");
+            h.fetch_add(1, Ordering::SeqCst);
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+        }
+    });
+    (url, hits)
+}
+
+fn with_update_url(env: &Env, url: &str) {
+    let mut cfg: Value =
+        serde_json::from_str(&std::fs::read_to_string(&env.config).unwrap()).unwrap();
+    cfg["update"] = json!({"url": url});
+    std::fs::write(&env.config, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+}
+
+fn registry_db(env: &Env) -> rusqlite::Connection {
+    rusqlite::Connection::open(env.root.join("var/webpulse/webpulse.db")).unwrap()
+}
+
+/// Moves the stored `checked_at` back by `secs`.
+fn age_update_status(env: &Env, secs: i64) {
+    let db = registry_db(env);
+    let raw: String = db
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'update_status'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut v: Value = serde_json::from_str(&raw).unwrap();
+    v["checked_at"] = json!(v["checked_at"].as_i64().unwrap() - secs);
+    db.execute(
+        "UPDATE settings SET value = ? WHERE key = 'update_status'",
+        [v.to_string()],
+    )
+    .unwrap();
+}
+
+const RELEASE: &str = r#"{"tag_name":"v9.9.9","html_url":"https://github.com/inalto/webpulse/releases/tag/v9.9.9","published_at":"2026-10-17T08:00:00Z","body":"Added: everything\r\n","assets":[]}"#;
+
+#[test]
+fn update_check_cli_cache_admin_update_and_throttle() {
+    use std::sync::atomic::Ordering;
+    let env = fresh(SEED, "http-api-update");
+    let (url, hits) = fake_github(RELEASE);
+    with_update_url(&env, &url);
+    let cfg = [("WEBPULSE_CONFIG", env.config.display().to_string())];
+
+    let r = run(&["update-check", "--force", "--json"], &cfg, b"");
+    assert_eq!(r.code, 0, "{}{}", r.out(), r.stderr);
+    let v: Value = serde_json::from_slice(&r.stdout).unwrap();
+    assert_eq!(v["latest"], json!("9.9.9"));
+    assert_eq!(v["tag"], json!("v9.9.9"));
+    assert_eq!(v["current"], json!(env!("CARGO_PKG_VERSION")));
+    assert_eq!(v["is_newer"], json!(true));
+    assert_eq!(v["notes"], json!("Added: everything"));
+    assert_eq!(v["checked_at"], json!(NOW));
+    assert_eq!(v["error"], Value::Null);
+    assert_eq!(v["checked"], json!(true));
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    // cached for 20 h
+    let r = run(&["update-check", "--json"], &cfg, b"");
+    let v: Value = serde_json::from_slice(&r.stdout).unwrap();
+    assert_eq!(v["checked"], json!(false));
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "no request while cached");
+    // the nightly rollup checks once the status is stale
+    age_update_status(&env, 21 * 3600);
+    let r = run(&["rollup", "--quiet"], &cfg, b"");
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(hits.load(Ordering::SeqCst), 2, "rollup ran the check");
+    // update.check = false: no nightly check, update-check needs --force
+    let r = run(&["config", "set", "update.check", "false"], &cfg, b"");
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    age_update_status(&env, 21 * 3600);
+    run(&["rollup", "--quiet"], &cfg, b"");
+    let r = run(&["update-check", "--json"], &cfg, b"");
+    assert_eq!(r.code, 0);
+    assert_eq!(hits.load(Ordering::SeqCst), 2, "disabled");
+    let off = ok(
+        &api(&env, "admin", &[("a", "admin.update")], None),
+        "update",
+    );
+    assert_eq!(off["check_enabled"], json!(false));
+    run(&["config", "unset", "update.check"], &cfg, b"");
+    let r = run(&["update-check", "--force", "--quiet"], &cfg, b"");
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(hits.load(Ordering::SeqCst), 3, "--force always asks");
+
+    // admin.update: root, reseller (read only), cPanel user (403)
+    let u = ok(
+        &api(&env, "admin", &[("a", "admin.update")], None),
+        "update",
+    );
+    keys_present(
+        &[
+            "current",
+            "latest",
+            "tag",
+            "is_newer",
+            "html_url",
+            "published_at",
+            "notes",
+            "checked_at",
+            "error",
+            "checked_at_iso",
+            "check_enabled",
+            "install_sh",
+            "can_upgrade",
+            "upgrade_job",
+        ],
+        &u,
+        "admin.update",
+    );
+    assert_eq!(u["latest"], json!("9.9.9"));
+    assert_eq!(u["is_newer"], json!(true));
+    assert_eq!(u["check_enabled"], json!(true));
+    assert_eq!(
+        u["install_sh"],
+        json!(false),
+        "the test harness is not an installation"
+    );
+    assert_eq!(u["can_upgrade"], json!(false));
+    let rs = ok(
+        &api(&env, "reseller:reseller1", &[("a", "admin.update")], None),
+        "reseller",
+    );
+    assert_eq!(rs["latest"], json!("9.9.9"));
+    assert_eq!(rs["can_upgrade"], json!(false));
+    assert_eq!(rs["upgrade_job"], Value::Null);
+    err(
+        &api(&env, "user:alice", &[("a", "admin.update")], None),
+        403,
+        "forbidden",
+        "user",
+    );
+
+    // admin.update_check: POST, root only, throttled to once an hour
+    err(
+        &api(
+            &env,
+            "reseller:reseller1",
+            &[("a", "admin.update_check")],
+            Some(json!({})),
+        ),
+        403,
+        "forbidden",
+        "reseller check",
+    );
+    err(
+        &api_with(
+            &env,
+            "admin",
+            &[("a", "admin.update_check")],
+            None,
+            "GET",
+            None,
+        ),
+        405,
+        "method_not_allowed",
+        "GET check",
+    );
+    let n = hits.load(Ordering::SeqCst);
+    let c = ok(
+        &api(
+            &env,
+            "admin",
+            &[("a", "admin.update_check")],
+            Some(json!({})),
+        ),
+        "check",
+    );
+    assert_eq!(c["throttled"], json!(true), "checked less than an hour ago");
+    assert_eq!(hits.load(Ordering::SeqCst), n);
+    age_update_status(&env, 3601);
+    let c = ok(
+        &api(
+            &env,
+            "admin",
+            &[("a", "admin.update_check")],
+            Some(json!({})),
+        ),
+        "check",
+    );
+    assert_eq!(c["throttled"], json!(false));
+    assert_eq!(c["checked_at"], json!(NOW));
+    assert_eq!(hits.load(Ordering::SeqCst), n + 1);
+    // the upgrade needs an installation directory with install.sh
+    err(
+        &api(
+            &env,
+            "admin",
+            &[("a", "admin.run")],
+            Some(json!({"type": "upgrade"})),
+        ),
+        409,
+        "conflict",
+        "no installer",
+    );
+    err(
+        &api(
+            &env,
+            "reseller:reseller1",
+            &[("a", "admin.run")],
+            Some(json!({"type": "upgrade"})),
+        ),
+        403,
+        "forbidden",
+        "reseller upgrade",
+    );
+}
+
+/// Runs `<install>/bin/webpulse cgi --whm --api` as root (testing mode) with a JSON POST.
+fn whm_post(binary: &std::path::Path, env: &Env, action: &str, body: &str) -> Cgi {
+    use std::io::Write;
+    let mut c = std::process::Command::new(binary);
+    c.args(["cgi", "--whm", "--api"])
+        .env("WEBPULSE_CONFIG", &env.config)
+        .env("WEBPULSE_CGI_TESTING", "1")
+        .env("WEBPULSE_NOW", NOW.to_string())
+        .env("REQUEST_METHOD", "POST")
+        .env("QUERY_STRING", format!("a={action}"))
+        .env("CONTENT_LENGTH", body.len().to_string())
+        .env("HTTP_X_WEBPULSE_REQUEST", "1")
+        .env("REMOTE_USER", "root")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped());
+    let mut child = c.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(body.as_bytes())
+        .unwrap();
+    parse_cgi(&child.wait_with_output().unwrap().stdout)
+}
+
+fn wait_job(env: &Env, id: i64) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let jobs = ok(&api(env, "admin", &[("a", "admin.jobs")], None), "jobs");
+        let j = jobs["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["id"] == id)
+            .cloned()
+            .expect("job row");
+        if j["status"] != "running" || std::time::Instant::now() > deadline {
+            return j;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+#[test]
+fn admin_run_upgrade_runs_install_sh_and_finishes_the_job() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = fresh(SEED, "http-api-upgrade");
+    let (url, _) = fake_github(RELEASE);
+    with_update_url(&env, &url);
+    let r = run(
+        &["update-check", "--force", "--quiet"],
+        &[("WEBPULSE_CONFIG", env.config.display().to_string())],
+        b"",
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    // a fake installation: <inst>/bin/webpulse (this build) + a stub install.sh
+    let inst = env.root.join("inst");
+    std::fs::create_dir_all(inst.join("bin")).unwrap();
+    for d in [&inst, &inst.join("bin")] {
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let binary = inst.join("bin/webpulse");
+    std::fs::copy(bin(), &binary).unwrap();
+    let stub = |code: i32| {
+        let f = inst.join("install.sh");
+        std::fs::write(
+            &f,
+            format!(
+                "#!/bin/bash\necho \"$*\" > \"$(dirname \"$0\")/args\"\nenv | sort > \"$(dirname \"$0\")/env\"\necho \"stub installer $*\"\nexit {code}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+
+    stub(0);
+    let c = whm_post(&binary, &env, "admin.run", r#"{"type":"upgrade"}"#);
+    assert_eq!(c.status, 200, "{}", c.text());
+    let d = c.json()["data"].clone();
+    assert_eq!(d["tag"], json!("v9.9.9"));
+    let id = d["job_id"].as_i64().unwrap();
+    let j = wait_job(&env, id);
+    assert_eq!(j["type"], json!("upgrade"));
+    assert_eq!(j["scope"], json!("v9.9.9"));
+    assert_eq!(j["status"], json!("ok"), "{j}");
+    assert_eq!(j["message"], json!("Upgraded to v9.9.9"));
+    assert_eq!(read_file(&inst.join("args")), "--update --ref v9.9.9 -y\n");
+    let seen_env = read_file(&inst.join("env"));
+    assert!(
+        !seen_env.contains("REMOTE_USER") && !seen_env.contains("QUERY_STRING"),
+        "clean environment: {seen_env}"
+    );
+    let log = read_file(&env.root.join("var/webpulse/log/upgrade.log"));
+    assert!(
+        log.contains("stub installer --update --ref v9.9.9 -y"),
+        "{log}"
+    );
+    let u = ok(
+        &api(&env, "admin", &[("a", "admin.update")], None),
+        "update",
+    );
+    assert_eq!(u["upgrade_job"]["id"], json!(id));
+    assert_eq!(u["upgrade_job"]["status"], json!("ok"));
+
+    // a failing installer: job error with the exit status
+    stub(1);
+    let c = whm_post(&binary, &env, "admin.run", r#"{"type":"upgrade"}"#);
+    assert_eq!(c.status, 200, "{}", c.text());
+    let id = c.json()["data"]["job_id"].as_i64().unwrap();
+    let j = wait_job(&env, id);
+    assert_eq!(j["status"], json!("error"), "{j}");
+    assert!(
+        j["message"]
+            .as_str()
+            .unwrap()
+            .contains("exited with status 1"),
+        "{j}"
+    );
+
+    // an upgrade already running: 409
+    registry_db(&env)
+        .execute(
+            "INSERT INTO jobs (type, scope, started_at, status) VALUES ('upgrade', 'v9.9.9', ?, 'running')",
+            [NOW],
+        )
+        .unwrap();
+    let c = whm_post(&binary, &env, "admin.run", r#"{"type":"upgrade"}"#);
+    assert_eq!(c.status, 409, "{}", c.text());
+    assert_eq!(c.json()["error"]["code"], json!("conflict"));
+
+    // a tag that is not newer: 400
+    registry_db(&env)
+        .execute(
+            "UPDATE jobs SET status = 'error' WHERE status = 'running'",
+            [],
+        )
+        .unwrap();
+    let db = registry_db(&env);
+    let raw: String = db
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'update_status'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut st: Value = serde_json::from_str(&raw).unwrap();
+    st["latest"] = json!("0.0.1");
+    st["tag"] = json!("v0.0.1");
+    db.execute(
+        "UPDATE settings SET value = ? WHERE key = 'update_status'",
+        [st.to_string()],
+    )
+    .unwrap();
+    let c = whm_post(&binary, &env, "admin.run", r#"{"type":"upgrade"}"#);
+    assert_eq!(c.status, 400, "{}", c.text());
+}
+
+fn read_file(p: &std::path::Path) -> String {
+    std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+}

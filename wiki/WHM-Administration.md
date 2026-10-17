@@ -2,7 +2,9 @@
 
 The WHM plugin is where the server administrator (and resellers, within their own accounts) decides
 what gets collected, tunes the settings and runs jobs. Open it under **WHM » Plugins » WebPulse
-Analytics**, or go to `https://<server>:2087/cgi/webpulse/index.cgi`.
+Analytics**, or go to `https://<server>:2087/cgi/webpulse/index.cgi`. Since 0.4.0 the page sits
+inside WHM's own chrome: the WHM top bar, the left navigation (with **WebPulse Analytics**
+highlighted) and the breadcrumbs stay on screen, so you can move to any other WHM tool directly.
 
 ![The server view](https://raw.githubusercontent.com/inalto/webpulse/main/docs/screenshots/server-view-1280.png)
 
@@ -97,6 +99,31 @@ report in a new tab: the server name, the overview tiles, every domain with data
 not included. The print dialog opens once everything has loaded; choose **Save as PDF**. A reseller's
 report covers its own accounts only. From a domain's tabs the same button prints that domain's report
 (see [[Using the Dashboard]]).
+
+## Updates
+
+Every night the rollup asks GitHub for the latest WebPulse release (at most once every 20 hours; the
+request is made by the server, never by your browser). When a newer version exists, the **bell** in
+the header (next to **Download PDF**) shows a dot and its tooltip reads "WebPulse X.Y.Z available".
+Click it for the installed and latest version, the release date and a link to the release notes. The
+same information is in the **Updates** card at the bottom of the server view.
+
+- **Upgrade now** (administrator only) asks for confirmation, then runs
+  `/usr/local/webpulse/install.sh --update --ref <tag> -y` in the background. It shows up as a job of
+  type `upgrade` and takes about a minute; the WHM pages stay available meanwhile. The panel follows
+  the job and, when it is done, shows "Upgraded to X.Y.Z" and reloads the page after 5 seconds. If the
+  installer fails, the message says so and the full output is in `/var/webpulse/log/upgrade.log`
+  (the installer puts the previous release back by itself).
+- **Check again** asks GitHub right away (at most once an hour; within the hour you get the last
+  result).
+- Resellers see the notice and the release notes link, not the buttons.
+
+To check or upgrade from the shell: `webpulse update-check` (`--force` skips the 20-hour cache) and
+`install.sh --update`. To stop the nightly check (for example on servers without outbound HTTPS):
+
+```bash
+webpulse config set update.check false
+```
 
 ## Resellers
 

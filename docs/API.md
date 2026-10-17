@@ -150,7 +150,26 @@ so the Settings tab is testable); admin and reseller get 403, an empty body 400.
   `user` (404 otherwise). 409 `conflict` when a job of the same type and scope
   is running, or when 3 jobs are running (rows "running" for more than 6 hours
   are presumed dead and ignored).
+* `a=admin.run` (POST `{type: "upgrade"}`, root only) – one-click upgrade to the release found
+  by the last update check: spawns `bin/webpulse dev run-upgrade --job <id> --tag <tag>` detached
+  like the other jobs, which runs `bash <install_root>/install.sh --update --ref <tag> -y` (plus
+  `--repo <update.repo>` when it is not the default) with a clean environment, appends its output
+  to `<log_dir>/upgrade.log` and finishes the job `ok` ("Upgraded to <tag>") or `error` ("install.sh
+  exited with status N; …") from its exit status (killed after 30 minutes). The job row has type
+  `upgrade` and scope `<tag>`. Returns `{job_id, tag}`. 400 when no newer release is known or the
+  stored tag is not `^v?\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?$`; 409 `conflict` when an upgrade job
+  is running (started less than an hour ago) or when the binary does not run from an installation
+  (`<root>/bin/webpulse` with a root-owned, not group/other-writable `<root>/install.sh`); 403 for
+  resellers.
 * `a=admin.jobs` – last 50 rows of `jobs`.
+* `a=admin.update` (GET; admin and reseller) – the last release check, re-evaluated against the
+  running version: `{current, latest, tag, is_newer, html_url, published_at, notes (plain text,
+  ≤ 2 KiB), checked_at (unix s or null), error, checked_at_iso, check_enabled (update.check),
+  install_sh (root only: an installer is present), can_upgrade (root && is_newer && install_sh),
+  upgrade_job (root only: the newest job of type upgrade, or null)}`. The check itself runs on the
+  server (`webpulse update-check`, the nightly rollup); the browser never contacts GitHub.
+* `a=admin.update_check` (POST, root only) – asks GitHub again unless the last check is less than
+  an hour old; returns the `admin.update` object plus `throttled` (true = cached result returned).
 * `a=admin.purge` (POST `{user, domain?, confirm: "DELETE"}`, root only) –
   deletes the domain DB(s).
 * Domain reports (`overview`, `report`, …) work for admins with any

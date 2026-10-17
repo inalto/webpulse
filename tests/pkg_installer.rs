@@ -292,6 +292,21 @@ fn fresh_install_registers_everything() {
         std::fs::read(p.cpanel.join("whostmgr/docroot/addon_plugins/webpulse.png")).unwrap(),
         "WHM icon"
     );
+    // the WHM page template (master template wrapper)
+    let tmpl = p
+        .cpanel
+        .join("whostmgr/docroot/templates/webpulse/index.tmpl");
+    assert_eq!(
+        read(&repo().join("whm/templates/webpulse/index.tmpl")),
+        read(&tmpl),
+        "WHM page template"
+    );
+    assert_eq!(mode(&tmpl) & 0o777, 0o644, "template mode");
+    assert_eq!(
+        mode(tmpl.parent().unwrap()) & 0o777,
+        0o755,
+        "template dir mode"
+    );
     assert_eq!(
         read(&repo().join("whm/webpulse.conf")),
         read(&p.apps.join("webpulse.conf")),
@@ -596,6 +611,7 @@ fn a_failing_cpanel_step_prints_the_command_and_rolls_everything_back() {
     assert_missing(&p.releases().join("0.1.0"));
     assert_missing(&p.theme_dir());
     assert_missing(&p.cpanel.join("whostmgr/docroot/cgi/webpulse"));
+    assert_missing(&p.cpanel.join("whostmgr/docroot/templates/webpulse"));
     assert_missing(&p.cron.join("webpulse"));
     assert_missing(&p.apps.join("webpulse.conf"));
     assert_missing(&p.state.join("plugin.jupiter"));

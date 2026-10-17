@@ -12,4 +12,5 @@ pub mod rollup;
 pub mod run;
 pub mod session;
 pub mod store;
+pub mod update;
 pub mod user_settings;

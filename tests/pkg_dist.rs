@@ -138,6 +138,7 @@ fn build_release_packs_the_binary_tarball_with_the_installer_layout_and_the_inst
         "whm/cgi/api.cgi",
         "whm/webpulse.conf",
         "whm/addon_plugins/webpulse.png",
+        "whm/templates/webpulse/index.tmpl",
         "hooks/stats_runall_pre.sh",
         "hooks/stats_runuser_pre.sh",
     ] {

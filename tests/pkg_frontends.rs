@@ -781,67 +781,233 @@ fn the_shims_find_a_binary_next_to_them() {
 }
 
 // ---------------------------------------------------------------------------
-// WHM CGIs (bash)
+// WHM CGIs: index.cgi (Perl, WHM master template) and api.cgi (bash)
 // ---------------------------------------------------------------------------
 
-#[test]
-fn whm_index_cgi_and_api_cgi_exec_the_binary_with_the_documented_arguments() {
-    let cases: [(&str, &str, &[u8]); 2] = [
-        (
-            "index.cgi",
-            "cgi --whm --page --api-url api.cgi\n",
-            b"Content-Type: text/html; charset=utf-8\r\n\r\n<!doctype html><html></html>",
-        ),
-        (
-            "api.cgi",
-            "cgi --whm --api\n",
-            b"Status: 405 Method Not Allowed\r\nContent-Type: application/json\r\n\r\n{\"ok\":false}",
-        ),
-    ];
-    for (cgi, expected_args, response) in cases {
-        let stub = Stub::new(response, 0);
-        let (rc, out) = cmd(&["bash", &s(&repo().join("whm/cgi").join(cgi))])
-            .envs(&kv![
-                "WEBPULSE_BIN" => stub.path(),
-                "REMOTE_USER" => "reseller1",
-                "REQUEST_METHOD" => "POST",
-                "QUERY_STRING" => "a=admin.run",
-                "CONTENT_TYPE" => "application/json",
-                "CONTENT_LENGTH" => "2",
-                "HTTP_X_WEBPULSE_REQUEST" => "1",
-                "REMOTE_ADDR" => "198.51.100.7",
-                "WEBPULSE_CONFIG" => "/some/config.json",
-            ])
-            .stdin("{}")
-            .go();
-        assert_eq!(rc, 0, "{cgi}: {out}");
-        assert_eq!(stub.recorded("args"), expected_args, "{cgi} arguments");
-        assert_eq!(
-            out.as_bytes(),
-            response,
-            "{cgi} stdout is exactly what the binary printed"
+/// The interpreter of a WHM CGI here: index.cgi is Perl (cPanel's perl on a server,
+/// the system perl in tests), api.cgi is bash.
+fn interp(cgi: &str) -> &'static str {
+    if cgi == "index.cgi" { "perl" } else { "bash" }
+}
+
+/// Stand-ins for cPanel's Perl modules: `Whostmgr::ACLS::init_acls()` and
+/// `Cpanel::Template::process_template()` record their calls in `$STUB_OUT.*`; the
+/// template prints the body between chrome markers.
+struct PerlStubs {
+    tmp: TmpDir,
+    out: PathBuf,
+}
+
+impl PerlStubs {
+    fn new() -> PerlStubs {
+        let tmp = TmpDir::new("perlstubs");
+        let out = tmp.join("rec");
+        write(
+            &tmp.join("lib/Whostmgr/ACLS.pm"),
+            r#"package Whostmgr::ACLS;
+use strict;
+sub init_acls { open(my $f, '>>', "$ENV{STUB_OUT}.acls") or die; print $f "init\n"; close $f; return 1 }
+sub hasroot { return 1 }
+1;
+"#,
         );
-        let seen = stub.recorded("env");
-        for line in [
-            "REMOTE_USER=reseller1",
-            "REQUEST_METHOD=POST",
-            "QUERY_STRING=a=admin.run",
-            "HTTP_X_WEBPULSE_REQUEST=1",
-            "REMOTE_ADDR=198.51.100.7",
-            "WEBPULSE_CONFIG=/some/config.json",
-        ] {
-            assert_contains(
-                &seen,
-                &format!("{line}\n"),
-                &format!("{cgi} forwards {line}"),
-            );
-        }
-        assert_eq!(
-            stub.recorded("stdin"),
-            "{}",
-            "{cgi}: the request body reaches the binary"
+        write(
+            &tmp.join("lib/Cpanel/Template.pm"),
+            r#"package Cpanel::Template;
+use strict;
+sub process_template {
+    my ($service, $args) = @_;
+    open(my $f, '>', "$ENV{STUB_OUT}.tmpl") or die;
+    binmode $f;
+    print $f "service=$service\n";
+    print $f "template_file=$args->{template_file}\n";
+    print $f "print=$args->{print}\n";
+    print $f "body=$args->{data}{body}";
+    close $f;
+    die "simulated template failure\n" if $ENV{STUB_TEMPLATE_DIE};
+    print "<!--WHM-CHROME-->" . $args->{data}{body} . "<!--/WHM-CHROME-->" if $args->{print};
+    return 1;
+}
+1;
+"#,
+        );
+        PerlStubs { tmp, out }
+    }
+    fn lib(&self) -> String {
+        format!("-I{}", s(&self.tmp.join("lib")))
+    }
+    fn recorded(&self, ext: &str) -> Option<String> {
+        std::fs::read_to_string(format!("{}.{ext}", self.out.display())).ok()
+    }
+}
+
+const FRAGMENT: &[u8] = b"Status: 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\n\r\n<div id=\"webpulse-app\" class=\"wp-root\" data-embedded=\"1\"></div>\n<script nonce=\"n\">x</script>\n";
+
+#[test]
+fn whm_index_cgi_renders_the_fragment_inside_the_whm_master_template() {
+    if !have("perl") {
+        skip!("perl not installed");
+    }
+    let stub = Stub::new(FRAGMENT, 0);
+    let perl = PerlStubs::new();
+    let (rc, out) = cmd(&["perl", &perl.lib(), &s(&repo().join("whm/cgi/index.cgi"))])
+        .envs(&kv![
+            "WEBPULSE_BIN" => stub.path(),
+            "STUB_OUT" => s(&perl.out),
+            "REMOTE_USER" => "reseller1",
+            "REQUEST_METHOD" => "GET",
+            "QUERY_STRING" => "",
+            "REMOTE_ADDR" => "198.51.100.7",
+            "WEBPULSE_CONFIG" => "/some/config.json",
+        ])
+        .stdin("this must not reach the binary")
+        .go();
+    assert_eq!(rc, 0, "{out}");
+    assert_eq!(
+        stub.recorded("args"),
+        "cgi --whm --page --embedded --api-url api.cgi\n",
+        "embedded fragment requested"
+    );
+    let body = "<div id=\"webpulse-app\" class=\"wp-root\" data-embedded=\"1\"></div>\n<script nonce=\"n\">x</script>\n";
+    assert_eq!(
+        out,
+        format!("Content-type: text/html\r\n\r\n<!--WHM-CHROME-->{body}<!--/WHM-CHROME-->"),
+        "WHM's header line, then the master template around the fragment (no binary headers)"
+    );
+    assert_eq!(
+        perl.recorded("tmpl").unwrap(),
+        format!("service=whostmgr\ntemplate_file=webpulse/index.tmpl\nprint=1\nbody={body}"),
+        "process_template('whostmgr', {{ template_file => 'webpulse/index.tmpl', print => 1, data => {{ body }} }})"
+    );
+    assert_eq!(
+        perl.recorded("acls").as_deref(),
+        Some("init\n"),
+        "init_acls() called"
+    );
+    let seen = stub.recorded("env");
+    for line in [
+        "REMOTE_USER=reseller1",
+        "REQUEST_METHOD=GET",
+        "REMOTE_ADDR=198.51.100.7",
+        "WEBPULSE_CONFIG=/some/config.json",
+    ] {
+        assert_contains(
+            &seen,
+            &format!("{line}\n"),
+            &format!("index.cgi forwards {line}"),
         );
     }
+    assert_eq!(stub.recorded("stdin"), "", "stdin of the binary is empty");
+}
+
+#[test]
+fn whm_index_cgi_passes_errors_of_the_binary_through_untouched() {
+    if !have("perl") {
+        skip!("perl not installed");
+    }
+    let perl = PerlStubs::new();
+    for response in [
+        &b"Status: 403 Forbidden\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\n\r\n<!doctype html><h2>Access denied</h2>"[..],
+        &b"Status: 500 Internal Server Error\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<h2>broken</h2>"[..],
+    ] {
+        let stub = Stub::new(response, 0);
+        let (rc, out) = cmd(&["perl", &perl.lib(), &s(&repo().join("whm/cgi/index.cgi"))])
+            .envs(&kv![
+                "WEBPULSE_BIN" => stub.path(),
+                "STUB_OUT" => s(&perl.out),
+                "REMOTE_USER" => "nobody-here",
+            ])
+            .go();
+        assert_eq!(rc, 0, "{out}");
+        assert_eq!(out.as_bytes(), response, "error page unchanged");
+        assert!(perl.recorded("tmpl").is_none(), "no template for an error");
+    }
+}
+
+#[test]
+fn whm_index_cgi_falls_back_to_the_standalone_page_without_cpanel_template() {
+    if !have("perl") {
+        skip!("perl not installed");
+    }
+    let page = b"Status: 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<!doctype html><html></html>";
+    let stub = Stub::new(page, 0);
+    let (rc, out) = cmd(&["perl", &s(&repo().join("whm/cgi/index.cgi"))])
+        .envs(&kv!["WEBPULSE_BIN" => stub.path(), "REMOTE_USER" => "root"])
+        .go();
+    assert_eq!(rc, 0, "{out}");
+    assert_eq!(out.as_bytes(), page, "the full document of the binary");
+    assert_eq!(
+        stub.recorded("args"),
+        "cgi --whm --page --api-url api.cgi\n",
+        "second run without --embedded"
+    );
+    // a template that dies still leaves the dashboard on the page
+    let stub = Stub::new(FRAGMENT, 0);
+    let perl = PerlStubs::new();
+    let (_, out) = cmd(&["perl", &perl.lib(), &s(&repo().join("whm/cgi/index.cgi"))])
+        .envs(&kv![
+            "WEBPULSE_BIN" => stub.path(),
+            "STUB_OUT" => s(&perl.out),
+            "STUB_TEMPLATE_DIE" => "1",
+            "REMOTE_USER" => "root",
+        ])
+        .go();
+    assert!(
+        out.starts_with("Content-type: text/html\r\n\r\n<div id=\"webpulse-app\""),
+        "fragment printed after a template failure: {out}"
+    );
+}
+
+#[test]
+fn whm_api_cgi_execs_the_binary_with_the_documented_arguments() {
+    let response: &[u8] =
+        b"Status: 405 Method Not Allowed\r\nContent-Type: application/json\r\n\r\n{\"ok\":false}";
+    let stub = Stub::new(response, 0);
+    let (rc, out) = cmd(&["bash", &s(&repo().join("whm/cgi/api.cgi"))])
+        .envs(&kv![
+            "WEBPULSE_BIN" => stub.path(),
+            "REMOTE_USER" => "reseller1",
+            "REQUEST_METHOD" => "POST",
+            "QUERY_STRING" => "a=admin.run",
+            "CONTENT_TYPE" => "application/json",
+            "CONTENT_LENGTH" => "2",
+            "HTTP_X_WEBPULSE_REQUEST" => "1",
+            "REMOTE_ADDR" => "198.51.100.7",
+            "WEBPULSE_CONFIG" => "/some/config.json",
+        ])
+        .stdin("{}")
+        .go();
+    assert_eq!(rc, 0, "{out}");
+    assert_eq!(
+        stub.recorded("args"),
+        "cgi --whm --api\n",
+        "api.cgi arguments"
+    );
+    assert_eq!(
+        out.as_bytes(),
+        response,
+        "stdout is exactly what the binary printed"
+    );
+    let seen = stub.recorded("env");
+    for line in [
+        "REMOTE_USER=reseller1",
+        "REQUEST_METHOD=POST",
+        "QUERY_STRING=a=admin.run",
+        "HTTP_X_WEBPULSE_REQUEST=1",
+        "REMOTE_ADDR=198.51.100.7",
+        "WEBPULSE_CONFIG=/some/config.json",
+    ] {
+        assert_contains(
+            &seen,
+            &format!("{line}\n"),
+            &format!("api.cgi forwards {line}"),
+        );
+    }
+    assert_eq!(
+        stub.recorded("stdin"),
+        "{}",
+        "the request body reaches the binary"
+    );
 }
 
 #[test]
@@ -852,7 +1018,7 @@ fn whm_cgis_print_a_generic_error_when_the_binary_is_missing() {
     let dir = TmpDir::new("whmmissing");
     for cgi in ["index.cgi", "api.cgi"] {
         script(&dir.join(cgi), &read(&repo().join("whm/cgi").join(cgi)));
-        let (rc, out) = cmd(&["bash", &s(&dir.join(cgi))])
+        let (rc, out) = cmd(&[interp(cgi), &s(&dir.join(cgi))])
             .env("WEBPULSE_BIN", dir.join("nonexistent/webpulse"))
             .env("REMOTE_USER", "root")
             .go();
@@ -880,22 +1046,20 @@ fn whm_cgis_also_find_bin_webpulse_next_to_the_script() {
     let dir = TmpDir::new("whmnear");
     let stub = Stub::new(b"Content-Type: text/plain\r\n\r\nnear", 0);
     script(&dir.join("bin/webpulse"), &read(&stub.bin));
-    let cgi = script(
-        &dir.join("index.cgi"),
-        &read(&repo().join("whm/cgi/index.cgi")),
-    );
-    let (rc, out) = cmd(&[&s(&cgi)]).env("REMOTE_USER", "root").go();
-    assert_eq!(rc, 0, "{out}");
-    assert_contains(&out, "near", "output of the binary");
-    assert_eq!(
-        stub.recorded("args"),
-        "cgi --whm --page --api-url api.cgi\n"
-    );
+    for cgi in ["index.cgi", "api.cgi"] {
+        let path = script(&dir.join(cgi), &read(&repo().join("whm/cgi").join(cgi)));
+        let (rc, out) = cmd(&[interp(cgi), &s(&path)])
+            .env("REMOTE_USER", "root")
+            .go();
+        assert_eq!(rc, 0, "{out}");
+        assert_contains(&out, "near", &format!("{cgi}: output of the binary"));
+    }
+    assert_eq!(stub.recorded("args"), "cgi --whm --api\n");
 }
 
 #[test]
 fn whm_cgis_ignore_a_webpulse_bin_that_is_group_or_other_writable() {
-    // WEBPULSE_BIN must be owned by the user running the shim (root under cpsrvd) and not
+    // WEBPULSE_BIN must be owned by the user running the CGI (root under cpsrvd) and not
     // group/other-writable, file and directory alike; otherwise the default path is used
     if real_install_exists() {
         skip!("a real installation exists on this machine");
@@ -909,50 +1073,56 @@ fn whm_cgis_ignore_a_webpulse_bin_that_is_group_or_other_writable() {
         |p: &Path, m: u32| std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap();
     let stub = Stub::new(b"Status: 200 OK\r\nContent-Type: text/plain\r\n\r\nstub", 0);
     let stub_dir = stub.bin.parent().unwrap().to_path_buf();
-    let run = || {
-        cmd(&["bash", &s(&dir.join("api.cgi"))])
-            .env("WEBPULSE_BIN", stub.path())
+    for cgi in ["index.cgi", "api.cgi"] {
+        let run = || {
+            cmd(&[interp(cgi), &s(&dir.join(cgi))])
+                .env("WEBPULSE_BIN", stub.path())
+                .env("REMOTE_USER", "root")
+                .env("REQUEST_METHOD", "GET")
+                .go()
+        };
+        // trusted: used
+        let (_, out) = run();
+        assert_contains(
+            &out,
+            "stub",
+            &format!("{cgi}: a trusted WEBPULSE_BIN is used"),
+        );
+        // group-writable binary: ignored (no default install here -> generic 500)
+        set_mode(&stub.bin, 0o775);
+        let (rc, out) = run();
+        assert_eq!(rc, 0, "{out}");
+        assert!(
+            out.starts_with("Status: 500 "),
+            "{cgi}: group-writable binary ignored: {out}"
+        );
+        set_mode(&stub.bin, 0o757);
+        let (_, out) = run();
+        assert!(
+            out.starts_with("Status: 500 "),
+            "{cgi}: other-writable binary ignored: {out}"
+        );
+        set_mode(&stub.bin, 0o755);
+        // world-writable directory: ignored (the binary could be swapped)
+        set_mode(&stub_dir, 0o777);
+        let (_, out) = run();
+        assert!(
+            out.starts_with("Status: 500 "),
+            "{cgi}: writable directory ignored: {out}"
+        );
+        set_mode(&stub_dir, 0o755);
+        // a symlink to an untrusted binary is judged by its target
+        let link = dir.join(&format!("link-{cgi}"));
+        std::os::unix::fs::symlink(&stub.bin, &link).unwrap();
+        set_mode(&stub.bin, 0o777);
+        let (_, out) = cmd(&[interp(cgi), &s(&dir.join(cgi))])
+            .env("WEBPULSE_BIN", &link)
             .env("REMOTE_USER", "root")
-            .env("REQUEST_METHOD", "GET")
-            .go()
-    };
-    // trusted: used
-    let (_, out) = run();
-    assert_contains(&out, "stub", "a trusted WEBPULSE_BIN is used");
-    // group-writable binary: ignored (no default install here -> generic 500)
-    set_mode(&stub.bin, 0o775);
-    let (rc, out) = run();
-    assert_eq!(rc, 0, "{out}");
-    assert!(
-        out.starts_with("Status: 500 "),
-        "group-writable binary ignored: {out}"
-    );
-    set_mode(&stub.bin, 0o757);
-    let (_, out) = run();
-    assert!(
-        out.starts_with("Status: 500 "),
-        "other-writable binary ignored: {out}"
-    );
-    set_mode(&stub.bin, 0o755);
-    // world-writable directory: ignored (the binary could be swapped)
-    set_mode(&stub_dir, 0o777);
-    let (_, out) = run();
-    assert!(
-        out.starts_with("Status: 500 "),
-        "writable directory ignored: {out}"
-    );
-    set_mode(&stub_dir, 0o755);
-    // a symlink to an untrusted binary is judged by its target
-    let link = dir.join("link-webpulse");
-    std::os::unix::fs::symlink(&stub.bin, &link).unwrap();
-    set_mode(&stub.bin, 0o777);
-    let (_, out) = cmd(&["bash", &s(&dir.join("index.cgi"))])
-        .env("WEBPULSE_BIN", &link)
-        .env("REMOTE_USER", "root")
-        .go();
-    assert!(
-        out.starts_with("Status: 500 "),
-        "symlink target checked: {out}"
-    );
-    set_mode(&stub.bin, 0o755);
+            .go();
+        assert!(
+            out.starts_with("Status: 500 "),
+            "{cgi}: symlink target checked: {out}"
+        );
+        set_mode(&stub.bin, 0o755);
+    }
 }

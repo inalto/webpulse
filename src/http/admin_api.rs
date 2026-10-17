@@ -15,6 +15,7 @@ use super::request::{Request, entries, field, field_nn, is_array, is_list};
 use super::resolver::{self, glob_db, glob_dirs, valid_domain, valid_user};
 use super::user_settings_api::is_valid_cidr;
 use crate::app::App;
+use crate::engine::update;
 use crate::reports::data::is_timezone_identifier;
 use crate::reports::domain_data::{Arg, date_c, date_ymd, domain_db_checked, php_default_tz};
 use crate::reports::{invalid, php};
@@ -52,6 +53,8 @@ pub fn handle(ctx: &Ctx, r: &Request, p: &Principal, action: &str) -> R {
         "run" => run(ctx, r, p),
         "jobs" => Ok(json!({"jobs": jobs(ctx, p, 50)?})),
         "purge" => purge(ctx, r, p),
+        "update" => update_info(ctx, p),
+        "update_check" => update_check(ctx, p),
         other => Err(ApiError::bad_request(&format!(
             "Unknown action \"admin.{}\"",
             php::substr(other, 40)
@@ -680,6 +683,9 @@ fn save_settings(ctx: &Ctx, r: &Request, p: &Principal) -> R {
 
 fn run(ctx: &Ctx, r: &Request, p: &Principal) -> R {
     let b = r.json()?;
+    if matches!(field_nn(&b, "type"), Some(Value::String(t)) if t == "upgrade") {
+        return upgrade(ctx, p);
+    }
     let kind = match field_nn(&b, "type") {
         Some(Value::String(t)) if JOB_TYPES.contains(&t.as_str()) => t.clone(),
         _ => {
@@ -848,4 +854,165 @@ fn purge(ctx: &Ctx, r: &Request, p: &Principal) -> R {
         let _ = reg.delete_summary(&user, domain.as_deref());
     }
     Ok(json!({"deleted": deleted}))
+}
+
+// ------------------------------------------------------------------ updates
+
+/// An upgrade job still "running" after this many seconds no longer blocks a new one.
+pub const UPGRADE_STALE_SECONDS: i64 = 3600;
+
+fn stored_update(ctx: &Ctx) -> Option<Value> {
+    ctx.registry()
+        .ok()?
+        .settings()
+        .ok()?
+        .into_iter()
+        .find(|(k, _)| k == update::SETTING_KEY)
+        .map(|(_, v)| v)
+}
+
+fn update_override_allowed(ctx: &Ctx) -> bool {
+    update::override_allowed(
+        ctx.app.is_root(),
+        ctx.app
+            .config_path()
+            .is_some_and(crate::app::is_production_config),
+    )
+}
+
+/// The newest upgrade job (root only), `None` when there is none.
+fn last_upgrade_job(ctx: &Ctx) -> anyhow::Result<Option<Map<String, Value>>> {
+    Ok(ctx
+        .registry()?
+        .jobs(100)?
+        .into_iter()
+        .find(|j| str_of(j, "type") == "upgrade"))
+}
+
+/// `admin.update`: the stored release check, re-evaluated against this binary.
+fn update_info(ctx: &Ctx, p: &Principal) -> R {
+    let prev = stored_update(ctx);
+    let mut v = update::view(prev.as_ref(), App::version());
+    let at = update::checked_at(prev.as_ref());
+    let install_sh = p.is_admin() && update::installer(ctx.paths.root()).is_some();
+    let newer = v["is_newer"] == json!(true);
+    let tag_ok = v["tag"].as_str().is_some_and(update::valid_tag);
+    v["checked_at_iso"] = iso_or_null(at);
+    v["check_enabled"] = json!(update::check_enabled(&ctx.app.config));
+    v["install_sh"] = json!(install_sh);
+    v["can_upgrade"] = json!(p.is_admin() && newer && tag_ok && install_sh);
+    v["upgrade_job"] = if p.is_admin() {
+        match last_upgrade_job(ctx)? {
+            Some(mut j) => {
+                let started = int_of(&j, "started_at");
+                let finished = int_of(&j, "finished_at");
+                j.insert("started_at_iso".into(), iso_or_null(started));
+                j.insert("finished_at_iso".into(), iso_or_null(finished));
+                Value::Object(j)
+            }
+            None => Value::Null,
+        }
+    } else {
+        Value::Null
+    };
+    Ok(v)
+}
+
+/// `admin.update_check` (root, POST): asks GitHub again unless the last check is
+/// less than an hour old (then the cached status comes back with `throttled`).
+fn update_check(ctx: &Ctx, p: &Principal) -> R {
+    if !p.is_admin() {
+        return Err(
+            ApiError::forbidden("Only the server administrator can check for updates").into(),
+        );
+    }
+    let prev = stored_update(ctx);
+    let now = ctx.now();
+    let throttled = !update::is_stale(prev.as_ref(), now, update::THROTTLE_SECONDS);
+    if !throttled {
+        let url = update::source_url(&ctx.app.config, update_override_allowed(ctx));
+        let (st, _) = update::check(url, prev.as_ref(), App::version(), now, true);
+        ctx.registry()?.set_setting(update::SETTING_KEY, &st)?;
+        if let Some(e) = st["error"].as_str() {
+            ctx.app.log.warn(format!("update check failed: {e}"));
+        }
+    }
+    let mut v = update_info(ctx, p)?;
+    v["throttled"] = json!(throttled);
+    Ok(v)
+}
+
+/// `admin.run {type: "upgrade"}` (root): starts `webpulse dev run-upgrade`, which runs
+/// `install.sh --update --ref <tag> -y` and finishes the job from its exit status.
+fn upgrade(ctx: &Ctx, p: &Principal) -> R {
+    if !p.is_admin() {
+        return Err(
+            ApiError::forbidden("Only the server administrator can upgrade WebPulse").into(),
+        );
+    }
+    let st = update::view(stored_update(ctx).as_ref(), App::version());
+    let tag = st["tag"].as_str().unwrap_or("").to_string();
+    if st["is_newer"] != json!(true) || !update::valid_tag(&tag) {
+        return Err(
+            ApiError::bad_request("No newer release is known; check for updates first").into(),
+        );
+    }
+    if update::installer(ctx.paths.root()).is_none() {
+        return Err(ApiError::new(
+            409,
+            "conflict",
+            "The installer (install.sh) was not found in the installation directory",
+        )
+        .into());
+    }
+    let reg = ctx.registry()?;
+    let now = ctx.now();
+    if let Some(j) = reg.jobs(100)?.into_iter().find(|j| {
+        str_of(j, "type") == "upgrade"
+            && str_of(j, "status") == "running"
+            && int_of(j, "started_at") >= now - UPGRADE_STALE_SECONDS
+    }) {
+        return Err(super::registry::Conflict(format!(
+            "An upgrade is already running (#{})",
+            int_of(&j, "id")
+        ))
+        .into());
+    }
+    let job_id = reg.start_job_limited(
+        "upgrade",
+        &tag,
+        now - JOB_STALE_SECONDS,
+        MAX_RUNNING_JOBS,
+        now,
+    )?;
+    let mut args = vec![
+        "dev".to_string(),
+        "run-upgrade".into(),
+        "--job".into(),
+        job_id.to_string(),
+        "--tag".into(),
+        tag.clone(),
+        "--quiet".into(),
+    ];
+    let repo = update::repo_of(&ctx.app.config);
+    if repo != update::DEFAULT_REPO && update::valid_repo(&repo) {
+        args.extend(["--repo".into(), repo]);
+    }
+    let cfg = ctx.config_path().filter(|c| c.is_file());
+    if let Some(c) = &cfg {
+        args.extend(["--config".into(), c.to_string_lossy().into_owned()]);
+    }
+    if job_runner::spawn(ctx, &args, cfg.as_deref()).is_none() {
+        let _ = reg.finish_job(
+            job_id,
+            "error",
+            Some("could not start the upgrade process"),
+            now,
+        );
+        return Err(ApiError::new(500, "spawn_failed", "Could not start the upgrade").into());
+    }
+    ctx.app
+        .log
+        .info(format!("upgrade to {tag} started from WHM (job {job_id})"));
+    Ok(json!({"job_id": job_id, "tag": tag}))
 }

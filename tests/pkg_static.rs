@@ -18,9 +18,11 @@ const SHELL_SCRIPTS: &[&str] = &[
     "scripts/devenv.sh",
     "scripts/geoip_fixture.sh",
     "scripts/publish_wiki.sh",
-    "whm/cgi/index.cgi",
     "whm/cgi/api.cgi",
 ];
+
+/// Perl CGIs (run by cPanel's perl; `perl -c` here).
+const PERL_SCRIPTS: &[&str] = &["whm/cgi/index.cgi"];
 
 /// The only PHP of the repository: the cPanel LiveAPI shims (cPanel requires PHP
 /// or Perl for `*.live.php`) and the parity driver of the 0.1.0 release.
@@ -43,6 +45,18 @@ fn bash_n_on_every_shell_script() {
 }
 
 #[test]
+fn perl_c_on_the_whm_page_cgi() {
+    if !have("perl") {
+        skip!("perl not installed");
+    }
+    let r = repo();
+    for f in PERL_SCRIPTS {
+        let (rc, out) = cmd(&["perl", "-c", &s(&r.join(f))]).go();
+        assert_eq!(rc, 0, "perl -c {f}\n{out}");
+    }
+}
+
+#[test]
 fn shellcheck_warning_level_when_available() {
     if !have("shellcheck") {
         skip!("shellcheck not installed");
@@ -60,6 +74,7 @@ fn scripts_are_executable_and_have_a_shebang() {
     for f in SHELL_SCRIPTS
         .iter()
         .filter(|f| **f != "installer/lib.sh")
+        .chain(PERL_SCRIPTS)
         .chain(["scripts/make_icons.py"].iter())
     {
         assert!(is_executable(&r.join(f)), "{f} must be executable");
@@ -80,18 +95,19 @@ fn php_l_on_the_cpanel_shims_and_their_library() {
 }
 
 #[test]
-fn whm_cgis_are_bash_shims_that_keep_the_whm_markers_and_exec_the_binary() {
+fn whm_cgis_keep_the_whm_markers_and_run_the_binary() {
     let r = repo();
-    for (f, exec) in [
+    for (f, shebang, exec) in [
         (
             "index.cgi",
-            r#"exec "$bin" cgi --whm --page --api-url api.cgi"#,
+            "#!/usr/local/cpanel/3rdparty/bin/perl",
+            "'cgi', '--whm', '--page', '--embedded', '--api-url', 'api.cgi'",
         ),
-        ("api.cgi", r#"exec "$bin" cgi --whm --api"#),
+        ("api.cgi", "#!/bin/bash", r#"exec "$bin" cgi --whm --api"#),
     ] {
         let src = read(&r.join("whm/cgi").join(f));
         let lines: Vec<&str> = src.split('\n').collect();
-        assert_eq!(lines[0], "#!/bin/bash", "{f} shebang");
+        assert_eq!(lines[0], shebang, "{f} shebang");
         assert_eq!(
             lines[1], "#WHMADDON:webpulse:WebPulse Analytics:webpulse.png",
             "{f} WHMADDON"
@@ -102,6 +118,26 @@ fn whm_cgis_are_bash_shims_that_keep_the_whm_markers_and_exec_the_binary() {
         assert_contains(&src, "/usr/local/webpulse/bin/webpulse", f);
         assert_not_contains(&src.to_lowercase(), "php", &format!("{f} has no PHP left"));
     }
+    // the WHM page sits in WHM's master template
+    let idx = read(&r.join("whm/cgi/index.cgi"));
+    for needle in [
+        "use strict;",
+        "use warnings;",
+        "Whostmgr::ACLS::init_acls()",
+        "Cpanel::Template::process_template(",
+        "template_file => 'webpulse/index.tmpl'",
+        "open( my $fh, '-|', $bin, @args )",
+    ] {
+        assert_contains(&idx, needle, "index.cgi");
+    }
+    let tmpl = read(&r.join("whm/templates/webpulse/index.tmpl"));
+    assert_contains(
+        &tmpl,
+        "[% WRAPPER 'master_templates/master.tmpl' theme=\"bootstrap\" header=\"WebPulse Analytics\" app_key='webpulse' include_legacy_stylesheets=0 -%]",
+        "template wrapper",
+    );
+    assert_contains(&tmpl, "[% data.body %]", "template body");
+    assert_contains(&tmpl, "[%- END %]", "template end");
 }
 
 #[test]

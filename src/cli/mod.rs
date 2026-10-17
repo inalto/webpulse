@@ -36,6 +36,7 @@ pub mod rollup;
 pub mod serve;
 pub mod setup;
 pub mod status;
+pub mod update_check;
 
 /// clap description of the command set (documentation; the dispatcher is
 /// [`main`], which follows the 0.1.0 parsing rules).
@@ -101,6 +102,8 @@ pub enum Command {
     /// Add or remove the WebPulse hub in the Meridian side-menu registry
     #[command(name = "meridian-registry")]
     MeridianRegistry(meridian_registry::Args),
+    /// Check GitHub for a newer WebPulse release (shown in WHM)
+    UpdateCheck(update_check::Args),
 }
 
 // ------------------------------------------------------------------ arguments
@@ -617,6 +620,13 @@ const COMMANDS: &[CmdDef] = &[
         spec: status::SPEC,
         handler: Handler::R1(status::main),
     },
+    CmdDef {
+        name: "update-check",
+        summary: update_check::SUMMARY,
+        hidden: false,
+        spec: update_check::SPEC,
+        handler: Handler::R1(update_check::main),
+    },
 ];
 
 /// Usage text of a command (`<command> --help`).
@@ -635,6 +645,7 @@ pub fn usage_of(name: &str) -> String {
         "rollup" => rollup::USAGE.to_string(),
         "setup" => setup::USAGE.to_string(),
         "status" => status::USAGE.to_string(),
+        "update-check" => update_check::USAGE.to_string(),
         "report" => REPORT_USAGE.to_string(),
         "serve" => SERVE_USAGE.to_string(),
         "cgi" => CGI_USAGE.to_string(),

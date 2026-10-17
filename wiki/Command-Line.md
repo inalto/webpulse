@@ -181,6 +181,19 @@ webpulse geoip-update [--force] [--url URL] [--out FILE]
 
 `--url` may contain `{YYYY}` and `{MM}`; `file://` URLs and local paths work. `--out` writes elsewhere.
 
+### update-check
+
+Asks the GitHub API for the latest release of `update.repo` (default `inalto/webpulse`), compares it
+with the installed version and stores the answer for the bell in WHM. The network is used at most
+once every 20 hours unless `--force`; with `update.check` set to false it does nothing unless
+`--force`. The nightly `webpulse rollup` runs the same check. Exit status 1 when the request failed.
+
+```
+webpulse update-check [--force] [--json]
+```
+
+To upgrade, use the bell in WHM or run `install.sh --update`.
+
 ### setup
 
 Creates or repairs the configuration file, the data, log, run and geoip directories, the hook flag

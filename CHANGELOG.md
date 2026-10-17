@@ -4,6 +4,31 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-17
+
+### Added
+- **The WHM page now sits inside WHM's own chrome**: the top bar, the left navigation (with WebPulse
+  Analytics highlighted) and the breadcrumbs stay on screen. `whm/cgi/index.cgi` is now a Perl CGI
+  that asks the binary for the embedded dashboard (`webpulse cgi --whm --page --embedded`) and hands
+  it to WHM's master template through `Cpanel::Template::process_template()` and the new
+  `whm/templates/webpulse/index.tmpl` (installed in `whostmgr/docroot/templates/webpulse/`). Errors
+  of the binary (403, 500) are passed through unchanged; outside cPanel's perl the full page is shown.
+  The dashboard resets host-page styles on its own elements, so WHM's stylesheets cannot restyle its
+  cards and tables; the embedded fragment is pure ASCII; the range buttons and KPI tiles compact
+  earlier beside the WHM menu. Printing and the PDF report still hide the WHM chrome.
+- **Update notification and one-click upgrade** (WHM). The nightly rollup (and the new
+  `webpulse update-check [--force] [--json]`) asks the GitHub API for the latest release of
+  `update.repo` (default `inalto/webpulse`, at most once every 20 hours) and stores the answer in the
+  registry. Administrators and resellers see a bell in the header, with a dot when a newer version
+  exists, and an **Updates** card in the Server view: installed and latest version, release date
+  and a link to the release notes. The server administrator can **Upgrade now** (runs
+  `install.sh --update --ref <tag> -y` in the background as a job of type `upgrade`, output in
+  `/var/webpulse/log/upgrade.log`; the page follows the job and reloads when it is done) or
+  **Check again** (at most once an hour). The browser never contacts GitHub. Turn the nightly check
+  off with `webpulse config set update.check false`.
+- API: `admin.update`, `admin.update_check` (POST) and `admin.run {type: "upgrade"}`; config keys
+  `update.check` (run-time setting) and `update.repo`.
+
 ## [0.3.0] - 2026-10-16
 
 ### Added
@@ -169,6 +194,7 @@ First public version.
   resellers no longer read global settings; log messages are sanitised; `\z` anchors in name validation and a
   single account-name rule.
 
+[0.4.0]: https://github.com/inalto/webpulse/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/inalto/webpulse/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/inalto/webpulse/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/inalto/webpulse/compare/v0.2.2...v0.2.3

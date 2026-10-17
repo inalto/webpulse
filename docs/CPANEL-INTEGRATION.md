@@ -166,25 +166,57 @@ accepts both and falls back to `getenv('REMOTE_USER')`, then to
 ## WHM plugin (administrator)
 
 ```
-/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/index.cgi    #!/bin/bash shim
-/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/api.cgi      #!/bin/bash shim
+/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/index.cgi    Perl CGI (cPanel's perl): the page, in WHM's chrome
+/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/api.cgi      #!/bin/bash shim: the JSON API
+/usr/local/cpanel/whostmgr/docroot/templates/webpulse/index.tmpl  Template Toolkit wrapper (0644, dir 0755)
 /usr/local/cpanel/whostmgr/docroot/addon_plugins/webpulse.png  48×48 transparent PNG
 /var/cpanel/apps/webpulse.conf
 ```
-`index.cgi` keeps the WHM header comments right after the shebang:
-```bash
-#!/bin/bash
+Both CGIs keep the WHM header comments right after the shebang:
+```perl
+#!/usr/local/cpanel/3rdparty/bin/perl
 #WHMADDON:webpulse:WebPulse Analytics:webpulse.png
 #ACLS:all
-exec /usr/local/webpulse/bin/webpulse cgi --whm --page --api-url api.cgi
 ```
-`api.cgi` is the same with `exec … cgi --whm --api`. Both locate the binary through `$WEBPULSE_BIN`
-(honoured only when the file and its directory belong to the user running the shim, root under
-cpsrvd, and are not group/other-writable), `/usr/local/webpulse/bin/webpulse`, then `bin/webpulse`
-next to the script, and print a generic
-500 (HTML or JSON) when none exists. cpsrvd's CGI environment (`REMOTE_USER`, `REQUEST_METHOD`,
-`QUERY_STRING`, `CONTENT_TYPE`, `CONTENT_LENGTH`, `HTTP_X_WEBPULSE_REQUEST`, `REMOTE_ADDR`) and the
-request body on stdin are inherited by `exec`.
+**The page inside WHM's chrome.** WHM CGIs get the top bar, the left navigation and the breadcrumbs
+by printing `Content-type: text/html\r\n\r\n` and rendering a template that wraps itself in WHM's
+master template (this is how cPanel's own CGIs do it, e.g. the changelog page). `index.cgi`
+(`use strict; use warnings; use lib '/usr/local/cpanel'`):
+1. calls `Whostmgr::ACLS::init_acls()` (the navigation is drawn from the ACLs);
+2. runs `webpulse cgi --whm --page --embedded --api-url api.cgi` with a list-form
+   `open(my $fh, '-|', $bin, @args)` (no shell; the CGI environment is inherited, stdin is
+   `/dev/null`) and splits its CGI head from the body;
+3. if the `Status:` is not 2xx (403 for a user that is neither root nor a reseller owning accounts,
+   500) prints the binary's output unchanged;
+4. otherwise prints `Content-type: text/html\r\n\r\n` and calls
+   `Cpanel::Template::process_template('whostmgr', { template_file => 'webpulse/index.tmpl', print => 1, data => { body => $body } })`
+   (if the template dies, the fragment is printed as is);
+5. if `Cpanel::Template` cannot be loaded (not cPanel's perl) it runs the binary again without
+   `--embedded` and prints the standalone page.
+
+`index.tmpl` (under `/usr/local/cpanel/whostmgr/docroot/templates/webpulse/`):
+```
+[% WRAPPER 'master_templates/master.tmpl' theme="bootstrap" header="WebPulse Analytics" app_key='webpulse' include_legacy_stylesheets=0 -%]
+[% data.body %]
+[%- END %]
+```
+`app_key='webpulse'` (the AppConfig `name`) highlights the entry in the navigation and breadcrumbs.
+TT does not escape `data.body`: it is our own fragment — `<div id="webpulse-app" class="wp-root"
+data-embedded="1">` followed by nonce'd `<style>`/`<script>` tags, no CSP meta (WHM's page is the
+document), and pure ASCII (non-ASCII characters are written as HTML, JS or CSS escapes) so that the
+template engine's byte/character handling cannot garble it. The dashboard CSS rolls every element
+under `.wp-root` back to the browser defaults (`:where(.wp-root) *:not(svg):not(svg *) { all: revert }`,
+specificity 0,0,3) so WHM's bootstrap and legacy rules on bare elements (`td`, `label`, `a`,
+`input[type=search]`…) cannot restyle cards and tables; the dark theme only applies inside `.wp-root`.
+Printing (the PDF report) hides every sibling of each ancestor of `#webpulse-app`, so WHM's chrome
+never reaches paper.
+
+Both CGIs locate the binary through `$WEBPULSE_BIN` (honoured only when the file and its directory
+belong to the user running the CGI, root under cpsrvd, and are not group/other-writable),
+`/usr/local/webpulse/bin/webpulse`, then `bin/webpulse` next to the script, and print a generic
+500 (HTML or JSON) when none exists. `api.cgi` `exec`s `webpulse cgi --whm --api`: cpsrvd's CGI
+environment (`REMOTE_USER`, `REQUEST_METHOD`, `QUERY_STRING`, `CONTENT_TYPE`, `CONTENT_LENGTH`,
+`HTTP_X_WEBPULSE_REQUEST`, `REMOTE_ADDR`) and the request body on stdin are inherited.
 The AppConfig `acls=all,list-accts` is what actually gates access in modern WHM;
 the `#ACLS` comment is the legacy marker. Whether a reseller with only
 `list-accts` sees the menu entry must be confirmed on a real server.
@@ -208,10 +240,8 @@ runs `/scripts/restartsrv_cpsrvd` only if registration reports it is needed):
 /usr/local/cpanel/bin/register_appconfig   /usr/local/webpulse/whm/webpulse.conf
 /usr/local/cpanel/bin/unregister_appconfig webpulse
 ```
-The CGI runs as root and `webpulse cgi --whm` refuses to run when its euid is not 0. It prints
-`Content-Type: text/html\r\n\r\n` then the SPA; WHM shows it inside its own frame so no WHM
-master template is needed. Mutating API actions need `POST` and `X-WebPulse-Request: 1` (the binary
-answers 405 otherwise).
+The CGIs run as root and `webpulse cgi --whm` refuses to run when its euid is not 0. Mutating API
+actions need `POST` and `X-WebPulse-Request: 1` (the binary answers 405 otherwise).
 Caller identity: `REMOTE_USER`; `root` → admin principal; otherwise
 the user is a reseller → `reseller` principal whose visible accounts are those
 with `OWNER=<reseller>` in `/var/cpanel/users/<account>` (root is also the
@@ -251,6 +281,14 @@ account), validates `^[a-z0-9_][a-z0-9_-]{0,31}$`, and touches the flag.
 10  2 * * * root /usr/local/webpulse/bin/webpulse rollup --quiet
 30  4 1 * * root /usr/local/webpulse/bin/webpulse geoip-update --quiet
 ```
+The nightly rollup also runs the update check (`update.check`, at most once every 20 h): a GET of
+`https://api.github.com/repos/<update.repo>/releases/latest` (10 s timeout, `User-Agent:
+webpulse/<version>`, 256 KiB cap), stored in the registry `settings` row `update_status` and shown by
+the WHM bell. **Upgrade now** (root) spawns `webpulse dev run-upgrade --job <id> --tag <tag>`
+detached (`setsid`, `nohup`), which runs `bash /usr/local/webpulse/install.sh --update --ref <tag> -y`
+with a clean environment (no CGI variables), appends to `/var/webpulse/log/upgrade.log` and finishes
+the `upgrade` job from the exit status. The installer replaces the binary, the CGIs and the
+template while WHM keeps serving the old ones until the symlink swap.
 
 ## Installer checks
 `install.sh` refuses to run when not root, when `/usr/local/cpanel/cpanel` is

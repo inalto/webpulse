@@ -345,7 +345,7 @@ fn page_rendering() {
     assert_eq!(c.header("Content-Type"), Some("text/html; charset=utf-8"));
     let html = c.text();
     assert!(html.starts_with("<!doctype html>"));
-    assert!(html.contains("window.WebPulseAdmin = { render: render, report: report };"));
+    assert!(html.contains("window.WebPulseAdmin = { render: render, report: report, "));
     assert!(html.contains("\"apiUrl\":\"api.cgi\""));
     let (_, c) = cgi(
         &env,

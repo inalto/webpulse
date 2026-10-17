@@ -63,6 +63,9 @@ The file shipped as `etc/config.json.default`:
 | `geoip.country_db` | `/var/webpulse/geoip/dbip-country-lite.mmdb` | no | Country database in MaxMind DB (`.mmdb`) format. |
 | `geoip.city_db` | `null` | no | Optional city database. Without one the **Cities** card stays empty. |
 | `geoip.url` | `https://download.db-ip.com/free/dbip-country-lite-{YYYY}-{MM}.mmdb.gz` | no | Download address used by `geoip-update`. Built-in default. |
+| `update.check` | `true` | yes | Look for a newer WebPulse release on GitHub during the nightly rollup (shown by the bell in WHM). `webpulse config set update.check false` turns it off. |
+| `update.repo` | `inalto/webpulse` | no | GitHub repository of the update check and of the one-click upgrade (`install.sh --repo`). |
+| `update.url` | `null` | no | Testing only: a URL that answers like `api.github.com/repos/<repo>/releases/latest`. Ignored by root on the production configuration. |
 
 ### Paths
 

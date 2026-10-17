@@ -261,7 +261,7 @@ fn dev_server_admin_and_reseller() {
     let r = get(s.port, "/", &[format!("X-WebPulse-Dev-Token: {}", s.token)]);
     assert!(
         r.body
-            .contains("window.WebPulseAdmin = { render: render, report: report };")
+            .contains("window.WebPulseAdmin = { render: render, report: report, ")
     );
 }
 

@@ -116,6 +116,44 @@ fn guard(src: &str, tag: &str) -> String {
     out
 }
 
+/// How a non-ASCII character is written by [`ascii_only`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ascii {
+    /// HTML text: `&#x2026;`
+    Html,
+    /// JavaScript source (strings, regexes, comments): `\u2026` (surrogate pairs above U+FFFF)
+    Js,
+    /// CSS (strings, comments): `\002026`
+    Css,
+}
+
+/// Rewrites every non-ASCII character as an escape of the given language, so a
+/// fragment survives a host template engine whatever its byte/character handling
+/// (WHM's Template Toolkit, cPanel's PHP header/footer).
+pub fn ascii_only(s: &str, how: Ascii) -> String {
+    if s.is_ascii() {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + s.len() / 8);
+    for c in s.chars() {
+        if c.is_ascii() {
+            out.push(c);
+            continue;
+        }
+        match how {
+            Ascii::Html => out.push_str(&format!("&#x{:X};", c as u32)),
+            Ascii::Css => out.push_str(&format!("\\{:06X}", c as u32)),
+            Ascii::Js => {
+                let mut buf = [0u16; 2];
+                for u in c.encode_utf16(&mut buf) {
+                    out.push_str(&format!("\\u{:04X}", u));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The `window.WEBPULSE` object.
 pub fn bootstrap(ctx: &Ctx, p: &Principal, o: &PageOptions) -> serde_json::Value {
     let domains = api::domains(ctx, p);
@@ -179,23 +217,35 @@ pub fn render(ctx: &Ctx, p: &Principal, o: &PageOptions) -> String {
     if p.has_admin_scope() {
         scripts.push(ADMIN_JS);
     }
+    // the fragment for a host page is pure ASCII (see `ascii_only`)
+    let esc = |src: &str, how: Ascii| -> String {
+        if o.embedded {
+            ascii_only(src, how)
+        } else {
+            src.to_string()
+        }
+    };
     let mut js = String::new();
     for s in scripts {
         js.push_str(&format!(
             "<script nonce=\"{nonce}\">\n{}\n</script>\n",
-            guard(s, "script")
+            esc(&guard(s, "script"), Ascii::Js)
         ));
     }
-    let boot = pjson::encode(&bootstrap(ctx, p, o), pjson::PAGE);
+    let boot = esc(
+        &pjson::encode(&bootstrap(ctx, p, o), pjson::PAGE),
+        Ascii::Js,
+    );
     let title = html_escape(o.title.as_deref().unwrap_or("WebPulse Analytics"));
     let body = format!(
-        "<div id=\"webpulse-app\" class=\"wp-root\" data-embedded=\"{}\"><noscript><p class=\"wp-noscript\">WebPulse Analytics needs JavaScript enabled.</p></noscript><div class=\"wp-boot\" aria-live=\"polite\">Loading analytics…</div></div>\n\
+        "<div id=\"webpulse-app\" class=\"wp-root\" data-embedded=\"{}\"><noscript><p class=\"wp-noscript\">WebPulse Analytics needs JavaScript enabled.</p></noscript><div class=\"wp-boot\" aria-live=\"polite\">Loading analytics{}</div></div>\n\
          <style nonce=\"{nonce}\">\n{}\n</style>\n\
          <script nonce=\"{nonce}\">window.WEBPULSE = {boot};</script>\n\
          {js}\
          <script nonce=\"{nonce}\">WebPulseApp.start(document.getElementById('webpulse-app'), window.WEBPULSE);</script>\n",
         if o.embedded { "1" } else { "0" },
-        guard(APP_CSS, "style"),
+        if o.embedded { "&#x2026;" } else { "…" },
+        esc(&guard(APP_CSS, "style"), Ascii::Css),
     );
     if o.embedded {
         return body;
@@ -226,6 +276,11 @@ mod tests {
             html_escape("<b a='1'>&\"</b>"),
             "&lt;b a=&#039;1&#039;&gt;&amp;&quot;&lt;/b&gt;"
         );
+        assert_eq!(ascii_only("a…b", Ascii::Html), "a&#x2026;b");
+        assert_eq!(ascii_only("'→'", Ascii::Js), "'\\u2192'");
+        assert_eq!(ascii_only("'😀'", Ascii::Js), "'\\uD83D\\uDE00'");
+        assert_eq!(ascii_only("\" ↓\"", Ascii::Css), "\" \\002193\"");
+        assert_eq!(ascii_only("plain", Ascii::Css), "plain");
         assert_eq!(
             guard("a</SCRIPT>b</script", "script"),
             "a<\\/script>b<\\/script"

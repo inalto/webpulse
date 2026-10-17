@@ -61,6 +61,7 @@
       other: 'M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM6.5 6.5a1.5 1.5 0 1 1 2 1.4c-.5.2-.5.6-.5 1.1M8 11v.5',
       refresh: 'M13 8a5 5 0 1 1-1.5-3.5M13 2.5v3h-3',
       server: 'M2.5 2.5h11v4.5h-11zM2.5 9h11v4.5h-11zM5 4.75h.01M5 11.25h.01M8 4.75h3M8 11.25h3',
+      bell: 'M4 11.5V7a4 4 0 0 1 8 0v4.5l1.25 1.5H2.75zM6.5 13.5a1.5 1.5 0 0 0 3 0',
       report: 'M9.5 1.5H4.5a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-9zM9.5 1.5v3h3M8 7v4.5M6 9.5l2 2 2-2'
     };
     var svg = document.createElementNS(NS, 'svg');
@@ -446,6 +447,16 @@
     els.pdfBtn.rel = 'noopener';
     els.pdfBtn.appendChild(svgIcon('report'));
 
+    // admin/reseller: update bell (data from admin.update; never for cPanel users)
+    if (S.isAdmin && window.WebPulseAdmin && window.WebPulseAdmin.bell) {
+      els.bellWrap = h('div', 'wp-domain wp-bell-wrap', null, ctr);
+      els.bellBtn = btn('wp-icon-btn wp-bell', null, function (ev) { ev.stopPropagation(); toggleUpdatePop(); }, els.bellWrap);
+      els.bellBtn.appendChild(svgIcon('bell'));
+      els.bellBtn.setAttribute('aria-haspopup', 'dialog');
+      els.bellBtn.setAttribute('aria-expanded', 'false');
+      window.WebPulseAdmin.bell(els.bellBtn, adminCtx());
+    }
+
     els.themeBtn = btn('wp-icon-btn', null, toggleTheme, ctr);
     els.themeBtn.setAttribute('aria-label', t('theme.toggle'));
     els.themeBtn.title = t('theme.toggle');
@@ -478,6 +489,23 @@
     var pops = S.root.querySelectorAll('.wp-pop');
     for (var i = 0; i < pops.length; i++) pops[i].parentNode.removeChild(pops[i]);
     if (S.els && S.els.domainBtn) S.els.domainBtn.setAttribute('aria-expanded', 'false');
+    if (S.els && S.els.bellBtn) S.els.bellBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggleUpdatePop() {
+    var wrap = S.els.bellWrap;
+    var open = wrap.querySelector('.wp-pop');
+    closePops();
+    if (open) { S.els.bellBtn.focus(); return; }
+    S.els.bellBtn.setAttribute('aria-expanded', 'true');
+    var pop = h('div', 'wp-pop is-right wp-upd-pop', null, wrap);
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', t('upd.title'));
+    pop.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    if (window.innerWidth <= 640) pop.style.top = Math.round(S.els.bellBtn.getBoundingClientRect().bottom + 6) + 'px';
+    window.WebPulseAdmin.updatePanel(h('div', 'wp-upd', null, pop), adminCtx());
+    var f = pop.querySelector('button, a');
+    if (f) f.focus();
   }
 
   function toggleDomainPop() {
@@ -1720,7 +1748,7 @@
   function adminCtx() {
     return {
       api: api, apiHref: apiHref, t: t, I: I, C: C, fmt: fmt, h: h, clear: clear, card: card, load: load, btn: btn, info: info,
-      legendList: legendList, svgIcon: svgIcon, ago: ago, dateFmt: dateFmt, parseDay: parseDay, stateBox: stateBox,
+      legendList: legendList, svgIcon: svgIcon, ago: ago, dateFmt: dateFmt, dateFmtY: dateFmtY, parseDay: parseDay, stateBox: stateBox,
       principal: S.boot.principal, seq: function () { return S.seq; },
       openDomain: function (user, domain) {
         var d = findDomain(domain, user);

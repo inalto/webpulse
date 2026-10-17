@@ -89,11 +89,52 @@ fn admin_pages_include_admin_js() {
         &Principal::admin(),
         PageOptions::new("api.cgi", false, None),
     );
-    assert!(html.contains("window.WebPulseAdmin = { render: render, report: report };"));
+    assert!(html.contains("window.WebPulseAdmin = { render: render, report: report, "));
     assert!(html.contains("\"principal\":{\"type\":\"admin\",\"name\":\"root\"}"));
     // the server view is a header button, not a tab
     assert!(html.contains("'wp-server-btn'") && html.contains("location.hash = '#server'"));
     assert!(!html.contains("tabs.unshift('server')"));
+    // update bell + popover (admin.update once at load; upgrade through admin.run)
+    for marker in [
+        "'wp-icon-btn wp-bell'",
+        "function toggleUpdatePop(",
+        "pop.setAttribute('role', 'dialog')",
+        "updatePanel: updPanel, bell: updBell",
+        "ctx.api({ a: 'admin.update' })",
+        "ctx.api({ a: 'admin.update_check' }, {})",
+        "ctx.api({ a: 'admin.run' }, { type: 'upgrade' })",
+        "a.rel = 'noopener noreferrer'",
+        "'upd.confirm'",
+        "/var/webpulse/log/upgrade.log",
+    ] {
+        assert!(html.contains(marker), "update marker {marker}");
+    }
+    let user = page(
+        &env,
+        &Principal::user("alice"),
+        PageOptions::new("api.live.php", false, None),
+    );
+    assert!(
+        !user.contains("a: 'admin.update'") && !user.contains("function updBell("),
+        "no update code for cPanel users"
+    );
+}
+
+#[test]
+fn embedded_fragment_is_pure_ascii_for_host_templates() {
+    let env = shared(SEED);
+    for p in [Principal::admin(), Principal::user("alice")] {
+        let html = page(&env, &p, PageOptions::new("api.cgi", true, None));
+        assert!(html.is_ascii(), "WHM/cPanel fragment is ASCII only");
+        assert!(html.contains("Loading analytics&#x2026;"));
+        assert!(
+            html.contains("\\u2192") || html.contains("\\u2026"),
+            "JS escapes"
+        );
+        // and the full document keeps its UTF-8
+        let doc = page(&env, &p, PageOptions::new("api.cgi", false, None));
+        assert!(doc.contains("Loading analytics…"));
+    }
 }
 
 /// Bootstrap of a page (`window.WEBPULSE`).

@@ -60,6 +60,8 @@ wp_init_env() {
     THEME_ROOT="$CPANEL_ROOT/base/frontend"
     CGI_DIR="$CPANEL_ROOT/whostmgr/docroot/cgi/webpulse"
     ADDON_ICON="$CPANEL_ROOT/whostmgr/docroot/addon_plugins/webpulse.png"
+    # Template Toolkit wrapper of the WHM page (WHM's master template: top bar + navigation)
+    WHM_TEMPLATES_DIR="$CPANEL_ROOT/whostmgr/docroot/templates/webpulse"
     APPCONF_FILE="$APPS_DIR/webpulse.conf"
     # Plugin descriptor as cPanel expects it: /var/cpanel/plugins/<id>/{install.json,icon,menu/}
     # (the menu/ directory is what puts the entry into the Meridian side menu).
@@ -455,7 +457,16 @@ wp_copy_whm_files() {
     done
     cp -f "$rel/whm/addon_plugins/webpulse.png" "$ADDON_ICON"
     chmod 644 "$ADDON_ICON"
-    wp_chown_root "$CGI_DIR" "$ADDON_ICON"
+    if [ -d "$rel/whm/templates/webpulse" ]; then
+        mkdir -p "$WHM_TEMPLATES_DIR"
+        chmod 755 "$WHM_TEMPLATES_DIR"
+        for f in "$rel"/whm/templates/webpulse/*.tmpl; do
+            [ -f "$f" ] || continue
+            cp -f "$f" "$WHM_TEMPLATES_DIR/$(basename "$f")"
+            chmod 644 "$WHM_TEMPLATES_DIR/$(basename "$f")"
+        done
+    fi
+    wp_chown_root "$CGI_DIR" "$ADDON_ICON" "$WHM_TEMPLATES_DIR"
 }
 
 wp_resync_frontends() { # undo helper used by update rollbacks
@@ -550,11 +561,11 @@ wp_try_quiet() { "$@" >/dev/null 2>&1 || true; }
 wp_install_whm_plugin() {
     wp_head "WHM plugin (administrator dashboard)"
     if [ "$WAS_INSTALLED" = 0 ]; then
-        wp_undo wp_safe_rm_rf "$CGI_DIR"
+        wp_undo wp_safe_rm_rf "$CGI_DIR" "$WHM_TEMPLATES_DIR"
         wp_undo rm -f "$ADDON_ICON"
     fi
     wp_copy_whm_files "$REL"
-    wp_ok "CGI scripts copied to $CGI_DIR"
+    wp_ok "CGI scripts copied to $CGI_DIR, page template to $WHM_TEMPLATES_DIR"
     if [ "$WAS_INSTALLED" = 0 ]; then
         wp_undo wp_try_quiet "$UNREGISTER_APPCONFIG" webpulse
     fi
@@ -817,9 +828,9 @@ wp_uninstall() {
         else
             wp_info "AppConfig not registered"
         fi
-        wp_safe_rm_rf "$CGI_DIR"
+        wp_safe_rm_rf "$CGI_DIR" "$WHM_TEMPLATES_DIR"
         rm -f "$ADDON_ICON"
-        wp_ok "CGI scripts and icon removed"
+        wp_ok "CGI scripts, page template and icon removed"
 
         wp_head "cPanel plugin"
         if [ -f "$MERIDIAN_REGISTRY" ] && [ -x "$INSTALL_LINK/bin/webpulse" ]; then

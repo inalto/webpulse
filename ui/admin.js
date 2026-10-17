@@ -113,6 +113,9 @@
     var acc = ctx.card(grid, { title: 'Accounts', sub: 'Collection is on for every account unless switched off here. "Default" follows the server setting.', span: 'wide' });
     var jobs = ctx.card(grid, { title: 'Jobs', span: isRoot ? 'two-thirds' : 'wide' });
     var set = isRoot ? ctx.card(grid, { title: 'Settings', sub: 'Server-wide; stored in the WebPulse registry.', span: 'third' }) : null;
+    var upd = ctx.card(grid, { title: t('upd.title'), sub: 'New releases are looked up nightly on GitHub by the server.', span: 'wide' });
+    upd.el.classList.add('wp-upd-card');
+    updPanel(h('div', 'wp-upd', null, upd.body), ctx);
 
     ctx.load({ el: hero, body: kp }, function () { return ctx.api({ a: 'admin.overview' }); }, function (o) {
       heroCells(kp, o, ctx);
@@ -416,5 +419,152 @@
     ctx.load(jobs, function () { return ctx.api({ a: 'admin.jobs' }); }, function (d) { jobsTable(jobs.body, d.jobs.slice(0, 20), ctx); });
   }
 
-  window.WebPulseAdmin = { render: render, report: report };
+
+  /* ---------------------------------------------------------- updates
+   * One shared state for the header bell and the Server view card: admin.update
+   * once at load, admin.update_check on "Check again", admin.run {type: upgrade}
+   * then admin.jobs every 3 s (up to 10 min) until the job finishes. */
+  var U = { data: null, phase: 'idle', note: '', job: 0, t0: 0, msg: '', views: [], timer: 0 };
+  function updNotify() { U.views = U.views.filter(function (f) { return f() !== false; }); }
+  function updLoad(ctx) {
+    if (!U.promise) {
+      U.promise = ctx.api({ a: 'admin.update' }).then(function (d) {
+        U.data = d;
+        var j = d.upgrade_job;
+        if (j && j.status === 'running' && U.phase === 'idle') { U.job = j.id; U.t0 = Date.now(); U.phase = 'running'; updPoll(ctx); }
+        updNotify();
+        return d;
+      });
+      U.promise.catch(function () { U.promise = null; });
+    }
+    return U.promise;
+  }
+  function updPoll(ctx) {
+    clearTimeout(U.timer);
+    U.timer = setTimeout(function () {
+      ctx.api({ a: 'admin.jobs' }).then(function (d) {
+        var j = d.jobs.filter(function (x) { return x.id === U.job; })[0];
+        if (j && j.status === 'ok') { U.phase = 'done'; U.left = 5; updTick(); }
+        else if (j && j.status !== 'running') { U.phase = 'failed'; U.msg = j.message || j.status; }
+        else if (Date.now() - U.t0 > 600000) { U.phase = 'failed'; U.msg = ctx.t('upd.timeout'); }
+        else updPoll(ctx);
+        updNotify();
+      }, function () { if (Date.now() - U.t0 > 600000) { U.phase = 'failed'; U.msg = ctx.t('upd.timeout'); updNotify(); } else updPoll(ctx); });
+    }, 3000);
+  }
+  function updTick() {
+    if (U.left <= 0) { window.location.reload(); return; }
+    setTimeout(function () { U.left--; updNotify(); updTick(); }, 1000);
+  }
+  function updAct(ctx, what) {
+    var t = ctx.t;
+    U.note = '';
+    if (what === 'check') {
+      U.phase = 'checking';
+      ctx.api({ a: 'admin.update_check' }, {}).then(function (d) {
+        U.data = d; U.phase = 'idle'; U.note = d.throttled ? t('upd.throttled') : '';
+      }, function (e) { U.phase = 'idle'; U.note = e.message; }).then(updNotify);
+    } else if (what === 'go') {
+      U.phase = 'starting';
+      ctx.api({ a: 'admin.run' }, { type: 'upgrade' }).then(function (r) {
+        U.job = r.job_id; U.t0 = Date.now(); U.phase = 'running'; updPoll(ctx);
+      }, function (e) { U.phase = 'idle'; U.note = e.message; }).then(updNotify);
+    } else U.phase = what === 'confirm' ? 'confirm' : 'idle';
+    updNotify();
+  }
+
+  /** Renders the update panel into `el` and keeps it current while it is in the page. */
+  function updPanel(el, ctx) {
+    var h = ctx.h, t = ctx.t;
+    function draw() {
+      if (!el.isConnected) return false;
+      var had = el.contains(document.activeElement);
+      ctx.clear(el);
+      var d = U.data;
+      if (!d) { h('p', 'wp-upd-sub', t('common.loading'), el); return; }
+      var isRoot = ctx.principal.type === 'admin', v = d.latest || '';
+      var head = U.phase === 'done' ? t('upd.done', { v: v }) : U.phase === 'failed' ? t('upd.failed')
+        : d.is_newer ? t('upd.h.new') : d.error ? t('upd.h.err') : d.latest ? t('upd.h.ok') : t('upd.h.none');
+      h('p', 'wp-upd-head', head, el);
+      var ver = h('div', 'wp-upd-ver', null, el);
+      var cur = h('div', null, null, ver);
+      h('span', 'wp-upd-label', t('upd.current'), cur);
+      h('span', 'wp-upd-num', d.current, cur);
+      if (d.latest && d.latest !== d.current) {
+        h('span', 'wp-upd-arrow', '→', ver).setAttribute('aria-hidden', 'true');
+        var lat = h('div', d.is_newer ? 'is-new' : null, null, ver);
+        h('span', 'wp-upd-label', t('upd.latest'), lat);
+        h('span', 'wp-upd-num', d.latest, lat);
+      }
+      var meta = h('p', 'wp-upd-sub', null, el);
+      var bits = [];
+      if (d.published_at) bits.push(t('upd.released', { d: ctx.dateFmtY.format(new Date(d.published_at)) }));
+      bits.push(d.checked_at_iso ? t('upd.checked', { ago: ctx.ago(d.checked_at_iso) }) : t('upd.never'));
+      meta.textContent = bits.join('. ') + '.';
+      if (d.html_url) {
+        var a = h('a', 'wp-upd-link', t('upd.notes'), el);
+        a.href = d.html_url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      }
+      if (d.error && U.phase === 'idle') h('p', 'wp-upd-err', d.error, el);
+      if (U.note) h('p', 'wp-upd-sub', U.note, el).setAttribute('role', 'status');
+      if (!d.check_enabled && U.phase === 'idle') h('p', 'wp-upd-sub', t('upd.off'), el);
+      var row = h('div', 'wp-upd-row', null, el);
+      var st = h('div', 'wp-upd-state', null, el);
+      st.setAttribute('role', 'status');
+      switch (U.phase) {
+        case 'confirm':
+          h('p', null, t('upd.confirm', { v: v }), st);
+          ctx.btn('is-primary', t('upd.go', { v: v }), function () { updAct(ctx, 'go'); }, row);
+          ctx.btn('is-ghost', t('upd.cancel'), function () { updAct(ctx, 'idle'); }, row);
+          break;
+        case 'starting': case 'running':
+          h('div', 'wp-upd-bar', null, st);
+          h('p', null, t('upd.running', { v: v }), st);
+          if (U.job) h('p', 'wp-upd-sub', t('upd.running.sub', { id: U.job, s: Math.round((Date.now() - U.t0) / 1000) }), st);
+          break;
+        case 'done':
+          ctx.btn('is-primary', t('upd.reload'), function () { window.location.reload(); }, row);
+          h('p', 'wp-upd-sub', t('upd.reloading', { s: U.left }), st);
+          break;
+        case 'failed':
+          h('p', 'wp-upd-err', U.msg, st);
+          h('p', 'wp-upd-sub', t('upd.log'), st);
+          ctx.btn('', t('state.retry'), function () { updAct(ctx, 'idle'); }, row);
+          break;
+        default:
+          if (!isRoot) { if (d.is_newer) h('p', 'wp-upd-sub', t('upd.reseller'), st); break; }
+          if (d.can_upgrade) ctx.btn('is-primary', t('upd.now'), function () { updAct(ctx, 'confirm'); }, row);
+          else if (d.is_newer) h('p', 'wp-upd-sub', t('upd.manual'), st);
+          var c = ctx.btn('', U.phase === 'checking' ? t('upd.checking') : t('upd.again'), function () { updAct(ctx, 'check'); }, row);
+          c.disabled = U.phase === 'checking';
+      }
+      if (!row.firstChild) row.hidden = true;
+      if (!st.firstChild) st.hidden = true;
+      var f = had && el.querySelector('.wp-upd-row button');
+      if (f) f.focus();
+    }
+    U.views.push(draw);
+    draw();
+    updLoad(ctx).catch(function (e) { if (el.isConnected) { ctx.clear(el); h('p', 'wp-upd-err', e.message, el); } });
+    return el;
+  }
+
+  /** Header bell: badge dot and tooltip when a newer release is known. */
+  function updBell(b, ctx) {
+    var dot = ctx.h('span', 'wp-bell-dot', null, b);
+    function draw() {
+      if (!b.isConnected) return false;
+      var d = U.data, newer = !!(d && d.is_newer && U.phase !== 'done');
+      dot.hidden = !newer && U.phase !== 'running';
+      dot.classList.toggle('is-busy', U.phase === 'running' || U.phase === 'starting');
+      var tip = newer ? ctx.t('upd.available', { v: d.latest }) : ctx.t('upd.bell');
+      b.title = tip;
+      b.setAttribute('aria-label', tip);
+    }
+    U.views.push(draw);
+    draw();
+    updLoad(ctx).catch(function () { /* the bell stays plain */ });
+  }
+
+  window.WebPulseAdmin = { render: render, report: report, updatePanel: updPanel, bell: updBell };
 })();

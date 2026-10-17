@@ -35,6 +35,11 @@ pub const DEFAULTS_JSON: &str = r#"{
     "city_db": null,
     "url": "https://download.db-ip.com/free/dbip-country-lite-{YYYY}-{MM}.mmdb.gz"
   },
+  "update": {
+    "check": true,
+    "repo": "inalto/webpulse",
+    "url": null
+  },
   "php_bin": null,
   "paths": {
     "data_dir": "/var/webpulse/data",
@@ -66,6 +71,7 @@ pub const FILE_DEFAULT_JSON: &str = r#"{
   "exclude_paths": ["/.well-known/", "/cpanel", "/whm", "/webmail", "/cgi-sys/"],
   "count_head_requests": false,
   "geoip": { "enabled": false, "country_db": "/var/webpulse/geoip/dbip-country-lite.mmdb", "city_db": null },
+  "update": { "check": true, "repo": "inalto/webpulse" },
   "php_bin": null,
   "paths": {
     "data_dir": "/var/webpulse/data",
@@ -95,6 +101,7 @@ pub const EDITABLE: &[&str] = &[
     "count_head_requests",
     "geoip.enabled",
     "static_prefixes",
+    "update.check",
 ];
 
 /// The effective configuration.
@@ -458,7 +465,11 @@ impl Config {
             p.starts_with('/') && p.len() <= 255 && !p.bytes().any(|b| b < 0x20)
         };
         match key {
-            "default_enabled" | "store_ip" | "count_head_requests" | "geoip.enabled" => boolean(),
+            "default_enabled"
+            | "store_ip"
+            | "count_head_requests"
+            | "geoip.enabled"
+            | "update.check" => boolean(),
             "raw_retention_days" => int(1, 3650),
             "max_rows_per_dim" => int(10, 100_000),
             "session_timeout_min" => int(5, 240),

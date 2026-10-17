@@ -18,7 +18,10 @@ administrator gets a WHM plugin to switch collection on and off per account or d
 
 - **cPanel plugin.** Every account owner sees a dashboard for each of their domains (cPanel » Metrics).
 - **WHM plugin.** The administrator sees a server-wide overview, switches collection per account and
-  per domain, edits the settings and starts collect, backfill and rollup jobs.
+  per domain, edits the settings and starts collect, backfill and rollup jobs. The page sits inside
+  WHM's own top bar and left navigation.
+- **Update notification and one-click upgrade.** A bell in the WHM header shows when a newer release
+  is out (checked nightly by the server); the administrator upgrades with one click.
 - **No tracker, no cookies.** Everything comes from the access logs. IP addresses are hashed with a
   salt that changes every day and are not stored by default.
 - **Survives log rotation.** Logs are read from a checkpoint (inode and offset). A cPanel hook drains
@@ -132,7 +135,7 @@ want to build it yourself?** `install.sh --build` downloads the source and runs 
    are kept.
 5. Copies the two LiveAPI shims into `/usr/local/cpanel/base/frontend/jupiter/webpulse/` and registers
    the plugin with `install_plugin` (Metrics group, feature `webpulse`).
-6. Copies the WHM CGI shims and icon and registers them with `register_appconfig`. It restarts
+6. Copies the WHM CGIs, the WHM page template and the icon and registers them with `register_appconfig`. It restarts
    `cpsrvd` only if the registration asks for it.
 7. Registers two Standardized Hooks with `manage_hooks` (`Stats::RunAll` and `Stats::RunUser`, stage
    `pre`) and creates `/var/webpulse/run/hook` (mode 1777).
@@ -151,7 +154,7 @@ Where things end up:
 | Configuration | `/etc/webpulse/config.json` (mode 0600) |
 | Statistics | `/var/webpulse/` (`webpulse.db`, `data/<user>/<domain>.db`, `geoip/`, `log/`, `run/`) |
 | cPanel plugin | `/usr/local/cpanel/base/frontend/jupiter/webpulse/` (PHP shims only) |
-| WHM plugin | `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/` (bash shims), `.../addon_plugins/webpulse.png`, `/var/cpanel/apps/webpulse.conf` |
+| WHM plugin | `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/` (`index.cgi` Perl, `api.cgi` bash), `/usr/local/cpanel/whostmgr/docroot/templates/webpulse/`, `.../addon_plugins/webpulse.png`, `/var/cpanel/apps/webpulse.conf` |
 | Cron | `/etc/cron.d/webpulse` |
 
 ### First steps after installing
@@ -217,7 +220,7 @@ For locked-down servers, every command the installer runs is listed in the wiki:
 
 The header has a domain picker (in WHM followed by the **Server** button, which switches to the
 server view), date range buttons (today, yesterday, 7 days, 30 days, this month, last month, 12 months,
-custom), a **Compare** switch, a **Download PDF** button and a light/dark toggle. Below it come eight
+custom), a **Compare** switch, a **Download PDF** button, in WHM an update bell, and a light/dark toggle. Below it come eight
 KPI tiles (visits, unique visitors, pageviews, pages per visit, average duration, bounce rate,
 bandwidth, bot share) and one main chart. Then the tabs:
 
@@ -250,6 +253,7 @@ webpulse report --user U --domain D [--range 30d] [--name DIMENSION] [--compare]
 webpulse config get|set|unset KEY [VALUE]             run-time settings (also editable in WHM)
 webpulse purge --user U [--domain D] --yes            delete statistics (irreversible)
 webpulse geoip-update [--force]                       download the DB-IP country database
+webpulse update-check [--force]                       look for a newer release on GitHub (shown in WHM)
 webpulse setup [--no-sync]                            create config, directories and registry (idempotent)
 webpulse hooked                                       same as collect --hooked
 webpulse serve --user U | --admin | --reseller NAME   local dev dashboard on 127.0.0.1 (no cPanel needed)
@@ -281,6 +285,8 @@ in the registry and win over the file.
 | `geoip.enabled` | `false` | Look up the country of each visit. *Editable.* |
 | `geoip.country_db` | `/var/webpulse/geoip/dbip-country-lite.mmdb` | Country database (`.mmdb`). |
 | `geoip.city_db` | `null` | Optional city database (`.mmdb`). |
+| `update.check` | `true` | Look for a newer WebPulse release on GitHub during the nightly rollup (the bell in WHM). *Editable.* |
+| `update.repo` | `inalto/webpulse` | GitHub repository the update check and the one-click upgrade use. |
 | `php_bin` | `null` | Obsolete since 0.2.0 (the program no longer uses PHP). Ignored; kept so old configuration files stay valid. |
 | `paths.data_dir` | `/var/webpulse/data` | Per-domain databases. |
 | `paths.registry_db` | `/var/webpulse/webpulse.db` | Registry database. |
@@ -326,7 +332,9 @@ entry point. The dashboard JavaScript and CSS (`ui/`) are embedded in it. cPanel
 `*.live.php` pages to be PHP (or Perl) to use its `CPANEL` class, so `index.live.php` and `api.live.php`
 are thin shims: they resolve the account from the cPanel session and run
 `webpulse cgi --principal user:<account>` as that account, forwarding the CGI variables and the
-request body. The WHM `index.cgi` and `api.cgi` are bash shims that `exec webpulse cgi --whm`.
+request body. In WHM, `api.cgi` is a bash shim that `exec`s `webpulse cgi --whm --api`, and `index.cgi`
+is a small Perl CGI that places the dashboard fragment (`webpulse cgi --whm --page --embedded`) into
+WHM's master template, so the page keeps WHM's navigation.
 The two hooks are shell scripts.
 
 ## Documentation

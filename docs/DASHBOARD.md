@@ -31,8 +31,8 @@ technical panels, AWStats' completeness):
 
 ```
 ┌ Header ─────────────────────────────────────────────────────────────────────┐
-│ ● WebPulse   [example.com ▾] [▤ Server]   [Today|Yesterday|7d|30d|Month|Last month|12m|Custom]  [Compare □]  [⤓ PDF]  [☾] │
-│   ([▤ Server] only for admin/reseller; icon-only below 640 px; [⤓ PDF] = "Download PDF", opens the report view) │
+│ ● WebPulse   [example.com ▾] [▤ Server]   [Today|Yesterday|7d|30d|Month|Last month|12m|Custom]  [Compare □]  [⤓ PDF]  [🔔]  [☾] │
+│   ([▤ Server] and [🔔] only for admin/reseller; icon-only below 640 px; [⤓ PDF] = "Download PDF", opens the report view) │
 │ Live: 7 active visits · last collection 3 min ago   (90 days / This year / All time live in the narrow-screen drop-down)                        │
 ├ KPI row (8 tiles, 4 per row on tablet, 2 on phone) ─────────────────────────┤
 │ Visits  Unique visitors  Pageviews  Pages/visit  Avg. duration  Bounce rate  Bandwidth  Bot share │
@@ -123,6 +123,25 @@ domains"). The server view contains:
   timeout, store IP, server-wide excluded IPs/paths, GeoIP toggle, timezone.
 * **Jobs**: Run collection now / Backfill from archives (pick account) /
   Run rollup, job history with status and line counts.
+* **Updates** (full width, last): the same panel as the bell popover below.
+
+### Update bell (admin and reseller)
+An icon button (bell) right of **Download PDF**, `aria-haspopup="dialog"`. Its data comes from
+`admin.update`, fetched once at load (never for cPanel users; the browser never calls GitHub).
+When `is_newer`, a small accent dot sits on the bell and its tooltip/`aria-label` reads
+"WebPulse X.Y.Z available" (else "WebPulse updates"). Clicking opens a popover (`role="dialog"`,
+Escape or a click outside closes it) with: a heading (Update available / WebPulse is up to date /
+Update check failed), *Installed* → *Latest* versions, release date and "Checked … ago", a
+**Release notes** link (`html_url`, new tab, `rel="noopener noreferrer"`), the last error if any.
+Root also gets **Upgrade now** (only when `can_upgrade`) and **Check again** (`admin.update_check`;
+"Checked less than an hour ago" when throttled); resellers read "The server administrator can
+upgrade WebPulse." **Upgrade now** first asks inline ("The WHM pages stay available during the
+upgrade, which takes about a minute"), then calls `admin.run {type: "upgrade"}` and polls
+`admin.jobs` every 3 s for up to 10 minutes, showing an indeterminate bar, the job number and the
+elapsed time (the bell's dot blinks meanwhile). On `ok`: "Upgraded to X.Y.Z" with **Reload**, and
+the page reloads by itself after 5 s; on `error`: the job message and "Details are in
+/var/webpulse/log/upgrade.log on the server", with **Try again**. A job still running when the page
+loads (`upgrade_job.status = running`) is picked up again. All text is set with `textContent`.
 
 ## Report view and PDF (`#report`)
 The header's **Download PDF** icon button (every principal, domain view with

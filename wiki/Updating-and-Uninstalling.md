@@ -5,7 +5,13 @@ the same `install.sh` that installed it.
 
 ## Updating
 
-Run as root:
+**One click from WHM (0.4.0 and later).** The server looks for a new release every night. When one is
+out, the bell in the WebPulse header in WHM shows a dot: open it (or the **Updates** card of the server
+view) and choose **Upgrade now**. This runs the same `install.sh --update` described below, for the
+release shown, in the background; the output is kept in `/var/webpulse/log/upgrade.log`. See
+[[WHM Administration]] for the details and for turning the nightly check off.
+
+**From the shell.** Run as root:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | bash -s -- --update
@@ -22,7 +28,7 @@ detects `/usr/local/webpulse/bin/webpulse` and updates in place. If WebPulse is 
    identical, it is reused; if it differs, the new one gets a timestamp suffix.
 2. Runs `webpulse setup`, which creates what is missing and migrates the database schema.
 3. Swaps the `/usr/local/webpulse` symlink to the new release.
-4. Refreshes the cPanel shim files in the theme directories, the WHM CGI shims and icon, and
+4. Refreshes the cPanel shim files in the theme directories, the WHM CGIs, page template and icon, and
    re-runs the registrations. A registration that is already in place is reported as such.
 5. Rewrites `/etc/cron.d/webpulse` only if its content changed.
 6. Keeps the three newest releases and removes older ones. The release that is active, and the one

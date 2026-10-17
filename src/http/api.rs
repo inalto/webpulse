@@ -22,8 +22,9 @@ use crate::reports::{
 };
 
 /// Actions that change state: POST + `X-WebPulse-Request: 1` required.
-pub const MUTATING: [&str; 6] = [
+pub const MUTATING: [&str; 7] = [
     "save_user_settings",
+    "admin.update_check",
     "admin.set_account",
     "admin.set_domain",
     "admin.save_settings",

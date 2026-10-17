@@ -87,6 +87,14 @@ body.wp-body { margin: 0; background: #f3f5f8; }
 @media screen and (prefers-color-scheme: dark) { body.wp-body, html:has(> body.wp-body) { background: #0e1115; } }
 body.wp-body .wp-root { min-height: 100vh; }
 
+/* Host pages (WHM's bootstrap chrome, cPanel's Jupiter) style bare elements. Roll every
+ * element back to the browser defaults the standalone page sees (svg excluded: revert would
+ * drop its presentation attributes); our own class rules then apply as usual. */
+:where(.wp-root) *:not(svg):not(svg *) { all: revert; }
+.wp-root { letter-spacing: normal; word-spacing: normal; text-transform: none; text-indent: 0; text-shadow: none;
+  font-style: normal; font-weight: 400; white-space: normal; box-sizing: border-box; }
+.wp-root svg { display: inline; overflow: hidden; vertical-align: baseline; max-width: none; }
+.wp-root table { border-collapse: collapse; }
 .wp-root *, .wp-root *::before, .wp-root *::after { box-sizing: border-box; }
 .wp-root h1, .wp-root h2, .wp-root h3, .wp-root h4, .wp-root p, .wp-root ul, .wp-root ol, .wp-root figure { margin: 0; padding: 0; }
 .wp-root ul, .wp-root ol { list-style: none; }
@@ -165,6 +173,34 @@ body.wp-body .wp-root { min-height: 100vh; }
 .wp-server-btn { font-weight: 600; }
 .wp-server-btn svg { width: 17px; height: 17px; }
 .wp-server-btn[aria-pressed="true"] { background: var(--wp-ink); color: var(--wp-surface); border-color: var(--wp-ink); }
+
+/* update bell + panel (WHM) */
+.wp-bell { position: relative; }
+.wp-bell-dot { position: absolute; top: 5px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--wp-accent); box-shadow: 0 0 0 2px var(--wp-surface); }
+.wp-bell-dot.is-busy { animation: wp-blink 1.2s ease-in-out infinite; }
+@keyframes wp-blink { 50% { opacity: .25; } }
+.wp-upd-pop { width: 340px; padding: 16px; }
+@media (max-width: 640px) { .wp-upd-pop { position: fixed; left: 12px; right: 12px; width: auto; max-width: none; } }
+.wp-upd { display: flex; flex-direction: column; gap: 10px; }
+.wp-upd-head { font-weight: 650; font-size: 15px; }
+.wp-upd-ver { display: flex; align-items: flex-end; gap: 14px; }
+.wp-upd-ver > div { display: flex; flex-direction: column; }
+.wp-upd-label { color: var(--wp-muted); font-size: 12px; }
+.wp-upd-num { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; color: var(--wp-ink-2); }
+.wp-upd-ver .is-new .wp-upd-num { color: var(--wp-accent-ink); }
+.wp-upd-arrow { color: var(--wp-muted); font-size: 18px; padding-bottom: 3px; }
+.wp-upd-sub { color: var(--wp-muted); font-size: 12.5px; }
+.wp-upd-err { color: var(--wp-bad-ink); font-size: 13px; overflow-wrap: anywhere; }
+.wp-root a.wp-upd-link { align-self: flex-start; font-weight: 560; }
+.wp-upd-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.wp-upd-state { display: flex; flex-direction: column; gap: 6px; }
+.wp-upd-bar { height: 4px; border-radius: 2px; background: var(--wp-surface-3); overflow: hidden; position: relative; }
+.wp-upd-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 35%; border-radius: 2px; background: var(--wp-accent); animation: wp-slide 1.4s ease-in-out infinite; }
+@keyframes wp-slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+.wp-upd-card .wp-upd { flex-flow: row wrap; align-items: center; gap: 10px 28px; }
+.wp-upd-card .wp-upd-head { flex: 1 0 100%; }
+.wp-upd-card .wp-upd-state { flex: 1 0 100%; }
+@media (prefers-reduced-motion: reduce) { .wp-upd-bar::after, .wp-bell-dot.is-busy { animation: none; } .wp-upd-bar::after { width: 100%; opacity: .6; } }
 
 /* segmented range */
 .wp-segmented { display: inline-flex; border: 1px solid var(--wp-line-strong); border-radius: var(--wp-radius-s); background: var(--wp-surface); padding: 2px; gap: 2px; }
@@ -481,6 +517,14 @@ body.wp-body .wp-root { min-height: 100vh; }
   .wp-kpi:nth-child(-n+4) { border-bottom: 1px solid var(--wp-line); }
   .wp-segmented { display: none; }
   .wp-range-select { display: inline-flex; }
+}
+/* inside the WHM / cPanel chrome a side menu takes ~250px: compact the header and KPIs earlier */
+@media (min-width: 641px) and (max-width: 1440px) {
+  .wp-root[data-embedded="1"] .wp-segmented { display: none; }
+  .wp-root[data-embedded="1"] .wp-range-select { display: inline-flex; }
+  .wp-root[data-embedded="1"] .wp-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .wp-root[data-embedded="1"] .wp-kpi:nth-child(4n) { border-right: 0; }
+  .wp-root[data-embedded="1"] .wp-kpi:nth-child(-n+4) { border-bottom: 1px solid var(--wp-line); }
 }
 @media (max-width: 900px) {
   .wp-card, .wp-card.is-third, .wp-card.is-two-thirds, .wp-card.is-quarter, .wp-card.is-seven, .wp-card.is-five { grid-column: span 12; }

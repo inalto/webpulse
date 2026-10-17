@@ -10,6 +10,7 @@
   "exclude_paths": ["/.well-known/", "/cpanel", "/whm", "/webmail", "/cgi-sys/"],
   "count_head_requests": false,
   "geoip": { "enabled": false, "country_db": "/var/webpulse/geoip/dbip-country-lite.mmdb", "city_db": null },
+  "update": { "check": true, "repo": "inalto/webpulse" },
   "php_bin": null,
   "paths": {
     "data_dir": "/var/webpulse/data",

@@ -57,6 +57,7 @@ pub fn is_mutating(action: &str) -> bool {
         || a.starts_with("save_")
         || a == "run"
         || a == "purge"
+        || a == "update_check"
         || a.starts_with("delete")
         || a.starts_with("reset")
         || a.starts_with("enable")
@@ -282,9 +283,13 @@ mod tests {
             is_mutating("admin.set_account")
                 && is_mutating("save_user_settings")
                 && is_mutating("admin.run")
+                && is_mutating("admin.update_check")
         );
         assert!(
-            !is_mutating("admin.jobs") && !is_mutating("overview") && !is_mutating("admin.running")
+            !is_mutating("admin.jobs")
+                && !is_mutating("overview")
+                && !is_mutating("admin.running")
+                && !is_mutating("admin.update")
         );
         assert!(mutation_allowed("overview", "GET", None));
         assert!(!mutation_allowed("admin.run", "GET", None));
