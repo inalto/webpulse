@@ -1,4 +1,4 @@
-//! `webpulse cgi (--principal user:NAME | --whm) (--api | --page) [--embedded] [--api-url URL]`
+//! `webpulse cgi (--principal user:NAME | --whm | --cockpit) (--api | --page) [--embedded] [--api-url URL]`
 //!
 //! CGI entry point used by the cPanel (PHP LiveAPI) and WHM (bash) shims
 //! (docs/RUST-PORT.md). Reads the CGI environment (`REQUEST_METHOD`,
@@ -10,6 +10,11 @@
 //!   run when the effective uid is neither 0 nor NAME's uid.
 //! * `--whm`: principal from `REMOTE_USER` (`root` → admin, otherwise a
 //!   reseller owning at least one account, else 403); refuses euid ≠ 0.
+//! * `--cockpit`: the Cockpit module runs the binary through `cockpit.spawn` as
+//!   the logged-in user (or as root with administrative access on). The
+//!   principal is the effective uid: 0 → admin, any other user → `user:<name>`
+//!   (the sites it owns; on cPanel the account of that name). `REMOTE_USER`
+//!   is ignored; `--page` prints the module document (see `webpulse page`).
 //!
 //! Development/test escape hatch: with `WEBPULSE_CGI_TESTING=1`, a
 //! non-default configuration (`--config` / `WEBPULSE_CONFIG`; compared with
@@ -31,11 +36,14 @@ use crate::paths::is_valid_user;
 #[derive(Debug, clap::Args)]
 pub struct Args {
     /// cPanel principal (`user:NAME`), for the LiveAPI shims
-    #[arg(long, value_name = "user:NAME", conflicts_with = "whm")]
+    #[arg(long, value_name = "user:NAME", conflicts_with_all = ["whm", "cockpit"])]
     pub principal: Option<String>,
     /// WHM principal from REMOTE_USER (root or a reseller)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "cockpit")]
     pub whm: bool,
+    /// Cockpit module: principal from the effective uid (root → admin, else the user)
+    #[arg(long)]
+    pub cockpit: bool,
     /// Dispatch the JSON API
     #[arg(long, conflicts_with = "page")]
     pub api: bool,
@@ -149,11 +157,22 @@ fn emit(resp: &Response) {
     let _ = out.flush();
 }
 
+/// `cgi --cockpit`: the principal of the effective uid (root → admin, a user
+/// with a valid account name → `user:<name>`, anything else → `None`).
+pub fn cockpit_principal(uid: u32) -> Option<Principal> {
+    if uid == 0 {
+        return Some(Principal::admin());
+    }
+    let name = crate::util::fs::user_name(uid)?;
+    is_valid_user(&name).then(|| Principal::user(&name))
+}
+
 /// Runs the CGI request.
 pub fn run(app: &App, a: &Args) -> Result<i32> {
-    if a.principal.is_none() == !a.whm {
+    let modes = a.principal.is_some() as u8 + a.whm as u8 + a.cockpit as u8;
+    if modes != 1 {
         return Err(WpError::Usage(
-            "exactly one of --principal user:NAME or --whm is required".into(),
+            "exactly one of --principal user:NAME, --whm or --cockpit is required".into(),
         )
         .into());
     }
@@ -178,7 +197,13 @@ pub fn run(app: &App, a: &Args) -> Result<i32> {
         Ok(crate::error::exit::ERROR)
     };
 
-    let principal = if let Some(spec) = &a.principal {
+    let principal = if a.cockpit {
+        let me = euid();
+        match cockpit_principal(me) {
+            Some(p) => Some(p),
+            None => return refuse(&format!("--cockpit: uid {me} has no valid account name")),
+        }
+    } else if let Some(spec) = &a.principal {
         let name = match spec.strip_prefix("user:") {
             Some(n) if is_valid_user(n) => n.to_string(),
             _ => {
@@ -206,7 +231,7 @@ pub fn run(app: &App, a: &Args) -> Result<i32> {
             let Some(p) = &principal else {
                 return Response::error(403, "forbidden", "Access denied.");
             };
-            if a.whm {
+            if a.whm || a.cockpit {
                 let action = crate::reports::Query::parse(
                     env.get("QUERY_STRING").map(String::as_str).unwrap_or(""),
                 )
@@ -232,6 +257,14 @@ pub fn run(app: &App, a: &Args) -> Result<i32> {
             }
             let req = Request::from_cgi(&env, &mut std::io::stdin().lock());
             return api::dispatch(&ctx, &req, p);
+        }
+        if a.cockpit {
+            return Response::new(
+                200,
+                "text/html; charset=utf-8",
+                page::render_cockpit(page::COCKPIT_BIN).into_bytes(),
+                vec![("Cache-Control".into(), "no-store".into())],
+            );
         }
         let Some(p) = &principal else {
             return denied_page(
@@ -296,5 +329,6 @@ mod tests {
         assert!(!mutation_allowed("admin.run", "POST", None));
         assert!(mutation_allowed("admin.run", "post", Some("1")));
         assert!(!mutation_allowed("overview", "PUT", Some("1")));
+        assert_eq!(cockpit_principal(0), Some(Principal::admin()));
     }
 }

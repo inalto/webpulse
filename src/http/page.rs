@@ -18,6 +18,10 @@ const I18N_JS: &str = include_str!("../../ui/i18n.js");
 const CHARTS_JS: &str = include_str!("../../ui/charts.js");
 const APP_JS: &str = include_str!("../../ui/app.js");
 const ADMIN_JS: &str = include_str!("../../ui/admin.js");
+const COCKPIT_JS: &str = include_str!("../../ui/cockpit.js");
+
+/// Default binary the Cockpit module spawns.
+pub const COCKPIT_BIN: &str = "/usr/local/webpulse/bin/webpulse";
 
 /// How the page is rendered.
 #[derive(Debug, Clone)]
@@ -181,6 +185,7 @@ pub fn bootstrap(ctx: &Ctx, p: &Principal, o: &PageOptions) -> serde_json::Value
         "domains": domains,
         "defaults": {"range": range, "dark": dark},
         "version": App::version(),
+        "mode": ctx.app.mode().as_str(),
         "embedded": o.embedded,
         "dims": dimension::meta(),
         "ranges": range::SHORTCUTS,
@@ -202,7 +207,7 @@ pub fn bootstrap(ctx: &Ctx, p: &Principal, o: &PageOptions) -> serde_json::Value
 }
 
 /// This machine's host name (`gethostname(2)`), `None` when unavailable.
-fn hostname() -> Option<String> {
+pub fn hostname() -> Option<String> {
     let mut buf = [0u8; 256];
     // SAFETY: the pointer and length describe `buf`, which is valid for writes.
     let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
@@ -267,6 +272,52 @@ pub fn render(ctx: &Ctx, p: &Principal, o: &PageOptions) -> String {
          <meta name=\"referrer\" content=\"no-referrer\">\n\
          <meta name=\"color-scheme\" content=\"light dark\">\n\
          <title>{title}</title>\n</head>\n<body class=\"wp-body\">\n{body}</body>\n</html>\n"
+    )
+}
+
+/// The `window.WEBPULSE` object of the Cockpit document. The page is generated
+/// once at install time and served to every Cockpit user, so it holds nothing
+/// principal-specific: `ui/cockpit.js` asks `a=whoami` and `a=domains` through
+/// `cockpit.spawn` before starting the dashboard.
+pub fn cockpit_bootstrap(bin: &str) -> serde_json::Value {
+    json!({
+        "apiUrl": "",
+        "transport": "cockpit",
+        "bin": bin,
+        "principal": null,
+        "domains": [],
+        "defaults": {"range": range::DEFAULT, "dark": "auto"},
+        "version": App::version(),
+        "embedded": false,
+        "dims": dimension::meta(),
+        "ranges": range::SHORTCUTS,
+    })
+}
+
+/// The complete `index.html` of the Cockpit module (`/usr/share/cockpit/webpulse/`):
+/// Cockpit's `../base1/cockpit.js`, the inlined assets and the Cockpit
+/// adapter. No CSP meta and no nonce: Cockpit sends the policy of the module's
+/// `manifest.json` (which allows the inline scripts and styles).
+pub fn render_cockpit(bin: &str) -> String {
+    let mut js = String::new();
+    for src in [I18N_JS, CHARTS_JS, APP_JS, ADMIN_JS, COCKPIT_JS] {
+        js.push_str(&format!("<script>\n{}\n</script>\n", guard(src, "script")));
+    }
+    let boot = pjson::encode(&cockpit_bootstrap(bin), pjson::PAGE);
+    format!(
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <meta name=\"referrer\" content=\"no-referrer\">\n\
+         <meta name=\"color-scheme\" content=\"light dark\">\n\
+         <title>Web analytics</title>\n\
+         <script src=\"../base1/cockpit.js\"></script>\n\
+         <style>\n{}\n</style>\n</head>\n<body class=\"wp-body wp-cockpit\">\n\
+         <div id=\"webpulse-app\" class=\"wp-root\" data-embedded=\"0\" data-transport=\"cockpit\"><noscript><p class=\"wp-noscript\">WebPulse Analytics needs JavaScript enabled.</p></noscript><div class=\"wp-boot\" aria-live=\"polite\">Loading analytics…</div></div>\n\
+         <script>window.WEBPULSE = {boot};</script>\n\
+         {js}\
+         <script>WebPulseCockpit.start(document.getElementById('webpulse-app'), window.WEBPULSE);</script>\n\
+         </body>\n</html>\n",
+        guard(APP_CSS, "style"),
     )
 }
 

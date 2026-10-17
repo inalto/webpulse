@@ -456,7 +456,7 @@ pub fn belongs_to(ctx: &Ctx, user: &str, domain: &str) -> anyhow::Result<bool> {
     {
         return Ok(true);
     }
-    if cpanel::domains_of(&ctx.paths, user).contains(domain) {
+    if ctx.app.provider().domains_of(user).contains_key(domain) {
         return Ok(true);
     }
     let db = domain_db_checked(&ctx.paths, user, domain)?;

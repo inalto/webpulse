@@ -314,7 +314,14 @@ fn response_cgi_status_line_and_envelope() {
 #[test]
 fn ui_assets_size_no_inner_html_no_external_urls() {
     let mut total = 0;
-    for f in ["app.css", "charts.js", "i18n.js", "app.js", "admin.js"] {
+    for f in [
+        "app.css",
+        "charts.js",
+        "i18n.js",
+        "app.js",
+        "admin.js",
+        "cockpit.js",
+    ] {
         let src = std::fs::read_to_string(repo().join("ui").join(f)).unwrap();
         total += src.len();
         for bad in [

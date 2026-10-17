@@ -5,6 +5,9 @@ docs.cpanel.net) on 2026-10-16. Where the docs were silent, the behaviour is
 marked *assumed* and the installer verifies it at run time and prints a clear
 error instead of guessing.
 
+Servers without cPanel (standalone mode, the Cockpit module): see
+[STANDALONE-COCKPIT.md](STANDALONE-COCKPIT.md).
+
 ## Access logs
 
 * Location: `/etc/apache2/logs/domlogs/<user>/<domain>` and
@@ -292,7 +295,7 @@ template while WHM keeps serving the old ones until the symlink swap.
 
 ## Installer checks
 `install.sh` refuses to run when not root, when `/usr/local/cpanel/cpanel` is
-missing (unless `--standalone`, which installs only CLI + dev server), when no
+missing (unless `--standalone`, see [STANDALONE-COCKPIT.md](STANDALONE-COCKPIT.md)), when no
 binary can be obtained (see `docs/INSTALL.md`: release download with sha256
 verification, `--build`, `--binary`) or when the binary does not run on the
 machine. It looks for cPanel's PHP (`/usr/local/cpanel/3rdparty/bin/php`, then

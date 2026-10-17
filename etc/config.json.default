@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "mode": "auto",
   "default_enabled": true,
   "timezone": null,
   "raw_retention_days": 30,
@@ -21,6 +22,10 @@
     "archive_dir": "/home/{user}/logs",
     "userdomains_file": "/etc/userdomains",
     "cpanel_users_dir": "/var/cpanel/users",
-    "home_root": "/home"
-  }
+    "home_root": "/home",
+    "cpanel_marker": "/usr/local/cpanel/cpanel",
+    "apache_conf_dirs": ["/etc/httpd", "/etc/apache2"],
+    "nginx_conf": "/etc/nginx/nginx.conf"
+  },
+  "sites": []
 }

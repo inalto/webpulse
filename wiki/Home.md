@@ -52,6 +52,14 @@ curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | b
 Then open **WHM » Plugins » WebPulse Analytics**. See [[Installation]] for requirements, flags and
 what the installer does.
 
+On a server **without cPanel** (Apache or nginx on AlmaLinux, Rocky, RHEL, Debian, Ubuntu):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | bash -s -- --standalone
+```
+
+and open **Cockpit » Web analytics** ([[Standalone Install]], [[Cockpit Module]]).
+
 ## Page index
 
 **Getting started**
@@ -59,6 +67,8 @@ what the installer does.
 - [[Installation]] - requirements, the one-line installer, flags, air-gapped and source builds, first collection
 - [[Updating and Uninstalling]] - update in place, roll back, remove
 - [[Manual Installation]] - every command the installer runs
+- [[Standalone Install]] - servers without cPanel: Apache/nginx discovery, `webpulse sites`, `serve` behind a reverse proxy
+- [[Cockpit Module]] - the dashboard inside Cockpit, administrative access, per-user view
 - [[Troubleshooting and FAQ]] - no data, missing icons, permission errors
 
 **Using WebPulse**

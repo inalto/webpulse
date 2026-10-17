@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WebPulse installer for cPanel & WHM.
+# WebPulse installer for cPanel & WHM, and for plain Apache/Nginx servers (--standalone).
 #
 #   curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | bash -s -- --geoip
@@ -16,7 +16,7 @@ set -euo pipefail
 
 usage() {
     cat <<'USAGE'
-WebPulse installer for cPanel & WHM (run as root)
+WebPulse installer for cPanel & WHM, or for any Apache/Nginx server with --standalone (run as root)
 
 Usage: install.sh [options]
 
@@ -30,7 +30,11 @@ Usage: install.sh [options]
   --update                update an existing installation in place (idempotent)
   --uninstall             remove plugins, hooks, cron and code; keeps /var/webpulse and /etc/webpulse
   --purge                 with --uninstall: also delete /var/webpulse (all statistics) and /etc/webpulse
-  --standalone            no cPanel: install only the CLI and the dev server
+  --standalone            no cPanel: Apache/Nginx server (sites from the web server configuration,
+                          cron, the Cockpit module when Cockpit is installed)
+  --cockpit               install the Cockpit module (/usr/share/cockpit/webpulse, "Web analytics")
+  --serve                 install and start webpulse-serve.service (systemd): the dashboard on
+                          http://127.0.0.1:8099, token in /etc/webpulse/serve-token
   --all-themes            install the cPanel plugin into every directory under base/frontend/
                           (by default: every theme with a dynamicui.conf, e.g. jupiter and meridian)
   --theme <name>          also install the cPanel plugin into this theme (repeatable)
@@ -42,6 +46,7 @@ Supported platforms for the prebuilt binary: Linux x86_64 and aarch64 (static mu
 Environment overrides (testing / unusual layouts):
   WEBPULSE_PREFIX, WEBPULSE_FAKE_CPANEL=1, WEBPULSE_CPANEL_ROOT, WEBPULSE_ETC,
   WEBPULSE_VAR, WEBPULSE_CRON_DIR, WEBPULSE_APPS_DIR, WEBPULSE_PLUGINS_DIR, WEBPULSE_SKIP_FIRST_COLLECT=1,
+  WEBPULSE_COCKPIT_DIR=<Cockpit's /usr/share/cockpit>, WEBPULSE_SYSTEMD_DIR, WEBPULSE_SYSTEMCTL,
   WEBPULSE_VERBOSE=1, WEBPULSE_BUILD=1, WEBPULSE_BINARY=<file>,
   WEBPULSE_DOWNLOAD_URL=<release tarball URL; its .sha256 is fetched next to it>,
   WEBPULSE_DOWNLOAD_SHA256=<expected hash>, WEBPULSE_SOURCE_URL=<source tarball URL>,
@@ -67,6 +72,8 @@ main() {
     WP_UNINSTALL=0
     WP_PURGE=0
     WP_STANDALONE=0
+    WP_COCKPIT=0
+    WP_SERVE=0
     WP_ALL_THEMES=0
     WP_EXTRA_THEMES=()
 
@@ -78,6 +85,8 @@ main() {
             --uninstall) WP_UNINSTALL=1 ;;
             --purge) WP_PURGE=1 ;;
             --standalone) WP_STANDALONE=1 ;;
+            --cockpit) WP_COCKPIT=1 ;;
+            --serve) WP_SERVE=1 ;;
             --all-themes) WP_ALL_THEMES=1 ;;
             --build) WP_BUILD=1 ;;
             -y|--yes) WP_YES=1 ;;

@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 
 use crate::config::Config;
 use crate::engine::classify::geoip::GeoIp;
-use crate::engine::discovery::CpanelUsers;
+use crate::engine::discovery::{CpanelUsers, Mode, Provider};
 use crate::engine::registry::Registry;
 use crate::engine::store::DomainStore;
 use crate::log::{Level, Log};
@@ -43,6 +43,7 @@ pub struct App {
     config_path: PathBuf,
     registry: OnceLock<Registry>,
     cpanel_users: OnceLock<CpanelUsers>,
+    provider: OnceLock<Box<dyn Provider>>,
     geoip: OnceLock<GeoIp>,
 }
 
@@ -172,6 +173,7 @@ impl App {
             config_path: path,
             registry: OnceLock::new(),
             cpanel_users: OnceLock::new(),
+            provider: OnceLock::new(),
             geoip: OnceLock::new(),
         }
     }
@@ -258,6 +260,19 @@ impl App {
     pub fn cpanel_users(&self) -> &CpanelUsers {
         self.cpanel_users
             .get_or_init(|| CpanelUsers::new(&self.paths))
+    }
+
+    /// Discovery mode (`mode` in config.json, `auto` resolved).
+    pub fn mode(&self) -> Mode {
+        crate::engine::discovery::resolve_mode(&self.config, &self.paths)
+    }
+
+    /// Account, domain and log discovery for the mode (lazy; standalone
+    /// discovery reads the web server configuration once per process).
+    pub fn provider(&self) -> &dyn Provider {
+        self.provider
+            .get_or_init(|| crate::engine::discovery::provider(&self.config, &self.paths))
+            .as_ref()
     }
 
     /// GeoIP lookups; an instance without databases when `geoip.enabled` is false.

@@ -221,7 +221,8 @@
       init.headers['X-WebPulse-Request'] = '1';
       init.body = JSON.stringify(body);
     }
-    var p = fetch(url, init).then(function (res) {
+    // transport: fetch(), or the Cockpit adapter's cockpit.spawn bridge (same Response shape)
+    var p = (S.fetchFn || window.fetch.bind(window))(url, init).then(function (res) {
       return res.text().then(function (txt) {
         var j = null;
         try { j = JSON.parse(txt); } catch (e) { j = null; }
@@ -443,8 +444,11 @@
     els.compareBtn.setAttribute('aria-label', t('compare.hint'));
 
     els.pdfBtn = h('a', 'wp-btn wp-icon-btn', null, ctr);
-    els.pdfBtn.target = '_blank';
-    els.pdfBtn.rel = 'noopener';
+    // inside Cockpit the report opens in the module's own frame (and prints it)
+    if (!S.fetchFn) {
+      els.pdfBtn.target = '_blank';
+      els.pdfBtn.rel = 'noopener';
+    }
     els.pdfBtn.appendChild(svgIcon('report'));
 
     // admin/reseller: update bell (data from admin.update; never for cPanel users)
@@ -477,6 +481,7 @@
     els.foot = h('footer', 'wp-foot', null, shell);
     h('span', null, 'WebPulse ' + (S.boot.version || ''), els.foot);
     h('span', null, 'Log-based, cookie-free analytics', els.foot);
+    if (S.boot.userLabel) h('span', 'wp-foot-user', S.boot.userLabel, els.foot);
     var gc = S.boot.geoip_credit;
     if (gc) {
       var ga = h('a', 'wp-foot-credit', gc.text, els.foot);
@@ -831,7 +836,33 @@
     h('span', null, 'CSV', a);
     a.title = t('table.export.title');
     a.setAttribute('aria-label', t('table.export') + ' — ' + title);
+    // a navigation would leave the Cockpit frame: fetch through the transport, save a Blob
+    if (S.fetchFn) a.addEventListener('click', function (ev) { ev.preventDefault(); downloadVia(a.href); });
     return a;
+  }
+  function downloadVia(url) {
+    S.fetchFn(url, { headers: { Accept: 'text/csv' } }).then(function (res) {
+      return res.text().then(function (txt) {
+        if (res.status !== 200) {
+          var j = null;
+          try { j = JSON.parse(txt); } catch (e) { j = null; }
+          throw new Error(j && j.error ? j.error.message : 'HTTP ' + res.status);
+        }
+        var cd = res.headers.get('Content-Disposition') || '';
+        var m = /filename="?([^";]+)"?/i.exec(cd);
+        var blob = new Blob([txt], { type: res.headers.get('Content-Type') || 'text/csv' });
+        var href = URL.createObjectURL(blob);
+        var tmp = h('a', null, null, document.body);
+        tmp.href = href;
+        tmp.download = m ? m[1] : 'webpulse.csv';
+        tmp.hidden = true;
+        tmp.click();
+        tmp.parentNode.removeChild(tmp);
+        setTimeout(function () { URL.revokeObjectURL(href); }, 30000);
+      });
+    }).catch(function (e) {
+      if (S.els && S.els.live) S.els.live.textContent = e.message;
+    });
   }
 
   /** Runs a promise for a card: holds the frame while loading, renders or shows an error. */
@@ -1754,7 +1785,7 @@
     return {
       api: api, apiHref: apiHref, t: t, I: I, C: C, fmt: fmt, h: h, clear: clear, card: card, load: load, btn: btn, info: info,
       legendList: legendList, svgIcon: svgIcon, ago: ago, dateFmt: dateFmt, dateFmtY: dateFmtY, parseDay: parseDay, stateBox: stateBox,
-      principal: S.boot.principal, seq: function () { return S.seq; },
+      principal: S.boot.principal, mode: S.boot.mode || null, seq: function () { return S.seq; },
       openDomain: function (user, domain) {
         var d = findDomain(domain, user);
         if (!d) {
@@ -1768,9 +1799,12 @@
 
   function start(root, boot) {
     if (!root || !boot) return;
-    var saved = storage('webpulse.theme');
+    var cockpit = boot.transport === 'cockpit' && window.WebPulseCockpit;
+    // inside Cockpit the shell's style wins over a theme saved in this browser
+    var saved = cockpit ? null : storage('webpulse.theme');
     S = {
-      root: root, boot: boot, apiUrl: boot.apiUrl || 'api', domains: boot.domains || [], cache: {}, seq: 0, q: '',
+      root: root, boot: boot, apiUrl: boot.apiUrl || (cockpit ? '' : 'api'), domains: boot.domains || [], cache: {}, seq: 0, q: '',
+      fetchFn: cockpit ? window.WebPulseCockpit.fetch : null,
       defaults: { range: (boot.defaults && boot.defaults.range) || '30d' },
       theme: saved || (boot.defaults && boot.defaults.dark) || 'auto',
       tab: 'overview', range: '30d', metrics: ['visits', 'pageviews'], compare: false, domain: null,
@@ -1784,5 +1818,12 @@
     route();
   }
 
-  window.WebPulseApp = { start: start };
+  /** Theme from the host (Cockpit shell style): 'auto' | 'light' | 'dark'. */
+  function setTheme(th) {
+    if (!S || (th !== 'auto' && th !== 'light' && th !== 'dark')) return;
+    S.theme = th;
+    applyTheme();
+  }
+
+  window.WebPulseApp = { start: start, setTheme: setTheme };
 })();

@@ -30,11 +30,13 @@ pub mod domains;
 pub mod geoip_update;
 pub mod hooked;
 pub mod meridian_registry;
+pub mod page;
 pub mod purge;
 pub mod report;
 pub mod rollup;
 pub mod serve;
 pub mod setup;
+pub mod sites;
 pub mod status;
 pub mod update_check;
 
@@ -104,6 +106,10 @@ pub enum Command {
     MeridianRegistry(meridian_registry::Args),
     /// Check GitHub for a newer WebPulse release (shown in WHM)
     UpdateCheck(update_check::Args),
+    /// Show the sites discovery found (config, Apache, nginx) and their logs
+    Sites(sites::Args),
+    /// Print the dashboard document of the Cockpit module
+    Page(page::Args),
 }
 
 // ------------------------------------------------------------------ arguments
@@ -572,6 +578,13 @@ const COMMANDS: &[CmdDef] = &[
         handler: Handler::R1(hooked::main),
     },
     CmdDef {
+        name: "page",
+        summary: "print the dashboard page for the Cockpit module (index.html)",
+        hidden: false,
+        spec: &[],
+        handler: Handler::R2,
+    },
+    CmdDef {
         name: "purge",
         summary: purge::SUMMARY,
         hidden: false,
@@ -614,6 +627,13 @@ const COMMANDS: &[CmdDef] = &[
         handler: Handler::R1(setup::main),
     },
     CmdDef {
+        name: "sites",
+        summary: sites::SUMMARY,
+        hidden: false,
+        spec: sites::SPEC,
+        handler: Handler::R1(sites::main),
+    },
+    CmdDef {
         name: "status",
         summary: status::SUMMARY,
         hidden: false,
@@ -645,6 +665,8 @@ pub fn usage_of(name: &str) -> String {
         "rollup" => rollup::USAGE.to_string(),
         "setup" => setup::USAGE.to_string(),
         "status" => status::USAGE.to_string(),
+        "sites" => sites::USAGE.to_string(),
+        "page" => page::USAGE.to_string(),
         "update-check" => update_check::USAGE.to_string(),
         "report" => REPORT_USAGE.to_string(),
         "serve" => SERVE_USAGE.to_string(),
@@ -666,22 +688,30 @@ previous period). With --name prints the ranked table of a dimension:
   Ranges: today yesterday 7d 30d 90d 12m month lastmonth year all
 ";
 
-const SERVE_USAGE: &str = "Usage: webpulse serve [--port 8099] (--user USER | --admin | --reseller NAME) [--config FILE] [--allow-root]
+const SERVE_USAGE: &str = "Usage: webpulse serve [--listen ADDR:PORT | --port PORT] [--token-file PATH] [--allow-host HOST]
+                      (--user USER | --admin | --reseller NAME) [--config FILE] [--allow-root]
 
-Serves the dashboard on 127.0.0.1:PORT (no cPanel needed). The dashboard
-is served at / and the API at /api, acting as the given principal:
-  --user USER       a cPanel account (sees its own domains)
-  --admin           the WHM root administrator (default)
+Serves the dashboard over HTTP (no cPanel needed): the page at / and the
+API at /api, acting as the given principal:
+  --user USER       an account (sees its own domains / the sites it owns)
+  --admin           the administrator (default)
   --reseller NAME   a reseller (sees the accounts it owns)
-  --allow-root      run even as root (refused by default)
-The server only listens on 127.0.0.1 and answers only requests carrying
-the random token of the printed URL (http://127.0.0.1:PORT/?token=…;
-the page then keeps it in a cookie). Stop it with Ctrl-C.";
+  --listen A:P      address and port (default 127.0.0.1:8099; --port P = 127.0.0.1:P)
+  --token-file F    persistent access token (created 0600 when missing)
+  --allow-host H    also accept this Host header (reverse proxy name; repeatable)
+  --allow-root      run even as root (refused by default; needed for --admin
+                    on a real server, whose statistics only root can read)
+Every request needs the access token: open http://ADDR:PORT/?token=TOKEN
+once, the page then keeps it in a cookie. Without --token-file a random
+token is printed at start. TLS is left to a reverse proxy (see the wiki
+page Standalone-Install). Stop it with Ctrl-C.";
 
-const CGI_USAGE: &str = "Usage: webpulse cgi (--principal user:NAME | --whm) (--api | --page) [--embedded] [--api-url URL]
+const CGI_USAGE: &str = "Usage: webpulse cgi (--principal user:NAME | --whm | --cockpit) (--api | --page) [--embedded] [--api-url URL]
 
-CGI entry point of the cPanel and WHM shims: reads the CGI environment and
-the request body, prints `Status:`, the headers, a blank line and the body.";
+CGI entry point of the cPanel and WHM shims and of the Cockpit module: reads
+the CGI environment and the request body, prints `Status:`, the headers, a
+blank line and the body. --cockpit takes the principal from the effective
+uid (root: administrator; another user: the sites that user owns).";
 
 fn find(name: &str) -> Option<&'static CmdDef> {
     let b = name.as_bytes();
@@ -753,6 +783,10 @@ fn run_r2(name: &str, global: &Global, rest: &[String]) -> std::result::Result<i
         "serve" => {
             let a: serve::Args = parse("serve", rest).map_err(|m| (exit::USAGE, m))?;
             boot().and_then(|app| serve::run(&app, &a))
+        }
+        "page" => {
+            let a: page::Args = parse("page", rest).map_err(|m| (exit::USAGE, m))?;
+            boot().and_then(|app| page::run(&app, &a))
         }
         _ => {
             let a: cgi::Args = parse("cgi", rest).map_err(|m| (exit::USAGE, m))?;

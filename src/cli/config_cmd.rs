@@ -17,7 +17,7 @@ pub const SPEC: &[(&str, Kind)] = &[];
 /// `--help` text.
 pub fn usage_text() -> String {
     format!(
-        "Usage: webpulse config get [KEY]\n       webpulse config set KEY VALUE     (VALUE is JSON, or a plain string)\n       webpulse config unset KEY\n\nRun-time settings are stored in the registry and override config.json:\n  {}\nOther keys (paths.*) are edited in config.json.",
+        "Usage: webpulse config get [KEY]\n       webpulse config set KEY VALUE     (VALUE is JSON, or a plain string)\n       webpulse config unset KEY\n\nRun-time settings are stored in the registry and override config.json:\n  {}\nOther keys (mode, sites, paths.*) are edited in config.json.",
         EDITABLE.join(", ")
     )
 }

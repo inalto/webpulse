@@ -11,7 +11,7 @@ open an issue and say why.
 | JavaScript tracker | Not implemented | Same. WebPulse is deliberately log-based. |
 | Multi-server | Not implemented | Same. One installation reports on one server only. |
 | World map of visitors | Not implemented | The dashboard document says a map is deferred; countries are shown as a ranked list with bars |
-| Standalone mode (without cPanel) | Not implemented as a product (only a CLI and dev-server install exists) | See below |
+| Standalone mode (without cPanel) | Done in 0.6.0 (Apache/nginx discovery, Cockpit module) | See below |
 
 ## E-mail reports
 
@@ -41,13 +41,12 @@ The Audience tab and the Countries card show a ranked list with flags and bars. 
 
 ## Standalone mode
 
-
-**Planned (see `docs/STANDALONE-COCKPIT.md` in the repository):** a full standalone mode for plain AlmaLinux/RHEL/Debian web servers (site discovery from Apache and Nginx configuration or an explicit `sites` list, logrotate-aware tailing, cron-only, `serve --listen` with a persistent token) and a **Cockpit module** that shows the same dashboard inside Cockpit using the existing `webpulse cgi` entry point through Cockpit's process bridge, with Cockpit handling login and administrative access.
-
-`install.sh --standalone` exists, but it only installs the command line program and the development
-server, without plugins, hooks or cron, as described in [[Development]]. A supported mode in which
-WebPulse runs on a server without cPanel, with its own scheduling and its own way to give people access,
-does not exist and is not documented anywhere in the project as planned work.
+Done in 0.6.0: `install.sh --standalone` installs WebPulse on a plain AlmaLinux/RHEL/Debian/Ubuntu web
+server (sites from the Apache and nginx configuration or an explicit `sites` list, logrotate-aware
+tailing, cron), with the dashboard in a **Cockpit module** or behind a reverse proxy with
+`webpulse serve` ([[Standalone Install]], [[Cockpit Module]]). Still planned: RPM and DEB packages
+built by the release workflow, and splitting a `vhost_combined` log shared by several virtual hosts
+by its `%v` field.
 
 ## Things that need verification
 
@@ -56,6 +55,8 @@ These are not features, but known gaps in what has been checked:
 - The cPanel registration steps (`install_plugin`, `register_appconfig`, `manage_hooks`) and the icon
   placement have not been run on a real cPanel server by the project.
 - Support for themes other than Jupiter.
+- The Cockpit module has been tested against a mock of Cockpit's API in a headless browser; log in to
+  a real Cockpit to check the menu entry, administrative access and printing.
 - Behaviour on very large servers (hundreds of domains); the WHM bot-share figure is marked partial
   above 300 domains.
 

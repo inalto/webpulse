@@ -210,16 +210,56 @@ webpulse setup [--no-sync]
 
 `--no-sync` skips creating the per-account directories.
 
+### sites
+
+What discovery found (since 0.6.0). On a standalone server: every site of the `sites` list of
+config.json, of the Apache and of the nginx configuration, with its source, owner, aliases, log files
+(exists, readable, declared format, whether the first line is a combined-format line) and archives,
+then the sites that are found but not collected, with the reason. On a cPanel server: the accounts'
+domains and their domlogs. Run it as root so the log files can be checked.
+
+```
+webpulse sites [--json]
+```
+
+See [[Standalone Install]].
+
 ### serve
 
-A local development dashboard that needs no cPanel. See [[Development]].
+The dashboard over HTTP, without cPanel: a development server, or with `--token-file` the web view of a
+standalone server behind a TLS reverse proxy ([[Standalone Install]]).
 
 ```
-webpulse serve [--port 8099] (--user USER | --admin | --reseller NAME) [--config FILE] [--allow-root]
+webpulse serve [--listen ADDR:PORT | --port PORT] [--token-file PATH] [--allow-host HOST]
+               (--user USER | --admin | --reseller NAME) [--config FILE] [--allow-root]
 ```
 
-It listens only on `127.0.0.1` and answers only requests that carry the random token in the printed
-URL. It refuses to run as root unless `--allow-root` is given.
+| Option | Meaning |
+|--------|---------|
+| `--listen ADDR:PORT` | Address to listen on, default `127.0.0.1:8099` (`--port P` = `127.0.0.1:P`). |
+| `--token-file PATH` | Persistent access token (created with mode 0600 when missing). Without it a random token is printed at start. |
+| `--allow-host HOST` | Also accept this `Host` header (a reverse proxy's public name). Repeatable. |
+| `--user`, `--admin`, `--reseller` | Principal (default `--admin`). |
+| `--allow-root` | Run as root (refused otherwise). |
+
+Every request needs the token: `http://ADDR:PORT/?token=…` once, then a cookie. Only expected `Host`
+headers are answered (`127.0.0.1:PORT`, `localhost:PORT`, `[::1]:PORT`, the listen address and the
+`--allow-host` names).
+
+### page
+
+Prints the `index.html` of the Cockpit module (the installer writes it to
+`/usr/share/cockpit/webpulse/`, see [[Cockpit Module]]).
+
+```
+webpulse page --cockpit [--bin /usr/local/webpulse/bin/webpulse]
+```
+
+### cgi
+
+The CGI entry point of the front ends: `--principal user:NAME` (cPanel shims), `--whm` (WHM CGIs,
+principal from `REMOTE_USER`) or `--cockpit` (the Cockpit module: principal from the effective uid,
+root is the administrator), with `--api` or `--page`. Not meant to be run by hand.
 
 ## Cron schedule
 
@@ -233,7 +273,8 @@ The installer writes `/etc/cron.d/webpulse`:
 | `30 4 1 * *` | `webpulse geoip-update --quiet` | Monthly GeoIP refresh (does nothing if GeoIP is off) |
 
 All run as root. The file is managed by the installer; edits are overwritten on update. Use
-`--no-cron` at install time if you want your own schedule.
+`--no-cron` at install time if you want your own schedule. A standalone installation has no
+`--hooked` line (there are no cPanel hooks).
 
 ## See also
 

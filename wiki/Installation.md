@@ -72,7 +72,9 @@ When stdin is not a terminal, as in `curl | bash`, the installer does not ask fo
 | `--update` | Update an existing installation. See [[Updating and Uninstalling]]. |
 | `--uninstall` | Remove WebPulse; statistics and configuration are kept. |
 | `--purge` | With `--uninstall`: also delete `/var/webpulse` and `/etc/webpulse`. |
-| `--standalone` | No cPanel: install only the CLI and the dev server. No plugins, hooks or cron. |
+| `--standalone` | No cPanel: a full installation for a plain Apache/nginx server (sites from the web server configuration, cron, the Cockpit module when Cockpit is installed). See [[Standalone Install]]. |
+| `--cockpit` | Install the Cockpit module (`/usr/share/cockpit/webpulse`, "Web analytics"), also on cPanel servers. See [[Cockpit Module]]. |
+| `--serve` | Install and start `webpulse-serve.service` (the dashboard on `127.0.0.1:8099`, token in `/etc/webpulse/serve-token`). |
 | `--all-themes` | Install the cPanel plugin into every directory under `/usr/local/cpanel/base/frontend/`. By default every theme with a `dynamicui.conf` (Jupiter, Meridian) is installed. |
 | `--theme <name>` | Also install into this theme. Repeatable. |
 | `-y`, `--yes` | Do not ask for confirmation. |

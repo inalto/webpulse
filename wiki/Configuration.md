@@ -23,6 +23,7 @@ The file shipped as `etc/config.json.default`:
 ```json
 {
   "version": 1,
+  "mode": "auto",
   "default_enabled": true,
   "timezone": null,
   "raw_retention_days": 30,
@@ -34,9 +35,17 @@ The file shipped as `etc/config.json.default`:
   "count_head_requests": false,
   "geoip": { "enabled": false, "country_db": "/var/webpulse/geoip/dbip-country-lite.mmdb", "city_db": null },
   "php_bin": null,
-  "paths": { "...": "see below" }
+  "paths": { "...": "see below" },
+  "sites": []
 }
 ```
+
+### Mode and sites (file only)
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `mode` | `auto` | `cpanel`, `standalone`, or `auto`: cPanel when `paths.cpanel_marker` (`/usr/local/cpanel/cpanel`) exists or `paths.cpanel_users_dir` is a directory, standalone otherwise. `install.sh --standalone` writes `standalone`. |
+| `sites` | `[]` | Standalone: sites declared by hand, `{"domain", "owner", "logs": [...], "archives", "aliases": [...]}`. They take precedence over what Apache and nginx discovery find. See [[Standalone Install]]. |
 
 ### Collection and retention
 
@@ -83,6 +92,9 @@ The file shipped as `etc/config.json.default`:
 | `paths.cpanel_userdata_dir` | `/var/cpanel/userdata` | Built-in default; not in the shipped file. |
 | `paths.cron_file` | `/etc/cron.d/webpulse` | Used by the cron-installed check. Built-in default. |
 | `paths.hooks_file` | `/var/cpanel/hooks.yaml` | Built-in default. |
+| `paths.cpanel_marker` | `/usr/local/cpanel/cpanel` | `mode: auto` means cPanel when this file exists. |
+| `paths.apache_conf_dirs` | `/etc/httpd`, `/etc/apache2` | Standalone: Apache configuration roots (`conf/httpd.conf` or `apache2.conf` inside). |
+| `paths.nginx_conf` | `/etc/nginx/nginx.conf` | Standalone: the nginx configuration. |
 
 Changing `paths.*` is the only reason to edit `config.json` by hand; the file is not touched when you
 change run-time settings.
@@ -146,6 +158,8 @@ server's own timezone. Excluded IPs and paths from the server and from the owner
 | WHM plugin | `/usr/local/cpanel/whostmgr/docroot/cgi/webpulse/` | root 0755 |
 | AppConfig | `/var/cpanel/apps/webpulse.conf` | root 0600 |
 | Cron | `/etc/cron.d/webpulse` | root 0644 |
+| Cockpit module | `/usr/share/cockpit/webpulse/` (`manifest.json`, `index.html`) | root 0644 |
+| `serve` service and token | `/etc/systemd/system/webpulse-serve.service`, `/etc/webpulse/serve-token` | root 0644, token 0600 |
 
 ## Installer environment variables
 

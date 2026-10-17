@@ -534,6 +534,8 @@ esac"#
             ("WEBPULSE_APPS_DIR".into(), s(&self.apps)),
             ("WEBPULSE_PLUGINS_DIR".into(), s(&self.plugins)),
             ("WEBPULSE_SKIP_FIRST_COLLECT".into(), "1".into()),
+            // never touch the real systemd
+            ("WEBPULSE_SYSTEMCTL".into(), "/nonexistent/systemctl".into()),
             // never build for real by accident
             ("WEBPULSE_CARGO".into(), "/nonexistent/cargo".into()),
             ("STUB_ENGINE_LOG".into(), s(&self.engine_log)),
@@ -638,6 +640,7 @@ pub fn make_source(p: &Sandbox, version: &str, dir: Option<&Path>, marker: &str)
         "cpanel",
         "whm",
         "hooks",
+        "cockpit",
         "installer",
         "install.sh",
         "uninstall.sh",

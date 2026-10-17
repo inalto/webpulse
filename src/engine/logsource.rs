@@ -3,7 +3,11 @@
 //!
 //! Checkpoint rules (live files):
 //! * no checkpoint → start at 0
-//! * inode changed → start at 0 of the new file (`inode`)
+//! * inode changed → when the previous file is still in the directory under a
+//!   rotated name (`<name>-<digit>…` or `<name>.<N>`, uncompressed, same inode,
+//!   same first bytes, at least as long as the stored offset), first finish it
+//!   from the stored offset, then read the new file from 0 ([`LogSource::rotated_from`]);
+//!   otherwise start at 0 of the new file (`inode`)
 //! * size < stored offset → file truncated, start at 0 (`truncated`)
 //! * first bytes differ from the stored fingerprint (`len:sha1`) → `replaced`
 //! * otherwise → continue at the stored offset
@@ -244,12 +248,23 @@ impl GzStream {
     }
 }
 
+/// The previous file of a rotated live log, read before the new one.
+struct Rotated {
+    file: File,
+    path: PathBuf,
+    inode: u64,
+    size: u64,
+}
+
 /// A log file being read.
 pub struct LogSource {
     path: PathBuf,
     https: bool,
     checkpoint: Option<Checkpoint>,
+    archive: bool,
     gzip: bool,
+    rotated: Option<Rotated>,
+    rotated_from: Option<(PathBuf, u64)>,
     file: Option<File>,
     gz: Option<GzStream>,
     buf: Vec<u8>,
@@ -279,13 +294,16 @@ fn sha1_hex(b: &[u8]) -> String {
 }
 
 impl LogSource {
-    /// A live log (`gzip == false`, with its checkpoint) or an archive.
+    /// A live log (`gzip == false`, with its checkpoint) or a gzip archive.
     pub fn new(path: &Path, https: bool, checkpoint: Option<Checkpoint>, gzip: bool) -> LogSource {
         LogSource {
             path: path.to_path_buf(),
             https,
             checkpoint,
+            archive: gzip,
             gzip,
+            rotated: None,
+            rotated_from: None,
             file: None,
             gz: None,
             buf: Vec::new(),
@@ -300,6 +318,14 @@ impl LogSource {
             reset_reason: None,
             account_uid: None,
         }
+    }
+
+    /// An archive for backfill: gzip when the name ends in `.gz`, else a plain
+    /// rotated log (`access_log-20261017`, `access.log.1`).
+    pub fn archive(path: &Path, https: bool) -> LogSource {
+        let mut s = LogSource::new(path, https, None, true);
+        s.gzip = path.to_string_lossy().ends_with(".gz");
+        s
     }
 
     /// uid of the account an archive belongs to (checked at open time when root).
@@ -318,13 +344,13 @@ impl LogSource {
     }
     /// True for archives.
     pub fn is_gzip(&self) -> bool {
-        self.gzip
+        self.archive
     }
 
     /// Opens the file and positions it according to the checkpoint.
     pub fn open(&mut self) -> Result<()> {
         let p = self.path.display().to_string();
-        let (f, st) = if self.gzip {
+        let (f, st) = if self.archive {
             open_archive(&self.path, self.account_uid, fs::is_root())?
         } else {
             std::fs::symlink_metadata(&self.path).map_err(|_| anyhow!("cannot stat {p}"))?;
@@ -340,8 +366,12 @@ impl LogSource {
         self.inode = st.ino();
         self.size = st.len();
         self.mtime = st.mtime();
-        if self.gzip {
-            self.gz = Some(GzStream::new(f));
+        if self.archive {
+            if self.gzip {
+                self.gz = Some(GzStream::new(f));
+            } else {
+                self.file = Some(f);
+            }
             return Ok(());
         }
         self.file = Some(f);
@@ -349,7 +379,17 @@ impl LogSource {
         if let Some(cp) = self.checkpoint.clone() {
             let off = cp.offset;
             if cp.inode != self.inode as i64 {
-                self.reset_reason = Some("inode");
+                match self.find_rotated(&cp) {
+                    Some(r) => {
+                        self.rotated_from = Some((r.path.clone(), off.max(0) as u64));
+                        self.rotated = Some(r);
+                        // lines appended to the old file before the rotation come first
+                        self.start = off.max(0) as u64;
+                        self.offset = self.start;
+                        return Ok(());
+                    }
+                    None => self.reset_reason = Some("inode"),
+                }
             } else if (self.size as i64) < off {
                 self.reset_reason = Some("truncated");
             } else if !self.fingerprint_matches(cp.first_line.as_deref().unwrap_or("")) {
@@ -375,6 +415,73 @@ impl LogSource {
     pub fn reset_reason(&self) -> Option<&'static str> {
         self.reset_reason
     }
+    /// The rotated previous file being finished first, with the offset it is
+    /// read from (see the module documentation).
+    pub fn rotated_from(&self) -> Option<(&Path, u64)> {
+        self.rotated_from.as_ref().map(|(p, o)| (p.as_path(), *o))
+    }
+    /// Inode of the file the next line comes from (the rotated previous file
+    /// until it is finished, then the live file).
+    pub fn current_inode(&self) -> u64 {
+        self.rotated.as_ref().map(|r| r.inode).unwrap_or(self.inode)
+    }
+    /// `(size, fingerprint)` of the file with inode `inode` (the live file or the
+    /// rotated previous one), for its checkpoint row.
+    pub fn checkpoint_of(&self, inode: u64) -> (u64, String) {
+        match &self.rotated {
+            Some(r) if r.inode == inode && inode != self.inode => (r.size, fingerprint_of(&r.file)),
+            _ => (self.size, self.fingerprint()),
+        }
+    }
+
+    /// The previous file of a rotated live log: a sibling named `<name>-<digit>…`
+    /// or `<name>.<N>` (not compressed) with the checkpoint's inode, at least as
+    /// long as the stored offset and with the same first bytes.
+    fn find_rotated(&self, cp: &Checkpoint) -> Option<Rotated> {
+        let dir = self.path.parent()?;
+        let name = self.path.file_name()?.to_string_lossy().into_owned();
+        if cp.inode <= 0 || cp.offset < 0 {
+            return None;
+        }
+        for f in fs::scandir(dir) {
+            let Some(rest) = f.strip_prefix(&name) else {
+                continue;
+            };
+            if !crate::engine::standalone::is_rotation_suffix(rest, false) {
+                continue;
+            }
+            let p = dir.join(&f);
+            let Ok(lst) = std::fs::symlink_metadata(&p) else {
+                continue;
+            };
+            if !lst.file_type().is_file() || lst.ino() as i64 != cp.inode {
+                continue;
+            }
+            let Ok(file) = fs::open_nonblocking(&p) else {
+                continue;
+            };
+            let Ok(st) = file.metadata() else {
+                continue;
+            };
+            if st.ino() != lst.ino() || st.dev() != lst.dev() || (st.len() as i64) < cp.offset {
+                continue;
+            }
+            if !fingerprint_matches_file(&file, st.len(), cp.first_line.as_deref().unwrap_or("")) {
+                continue;
+            }
+            let mut file = file;
+            if file.seek(SeekFrom::Start(cp.offset as u64)).is_err() {
+                continue;
+            }
+            return Some(Rotated {
+                file,
+                path: p,
+                inode: st.ino(),
+                size: st.len(),
+            });
+        }
+        None
+    }
     /// Offset the read started from.
     pub fn start_offset(&self) -> u64 {
         self.start
@@ -399,43 +506,26 @@ impl LogSource {
     /// `"<len>:<sha1 of the first len bytes>"` with len = min(256, current size);
     /// read with pread (the position is preserved). Empty for archives.
     pub fn fingerprint(&self) -> String {
-        let Some(f) = self.file.as_ref().filter(|_| !self.gzip) else {
+        let Some(f) = self.file.as_ref().filter(|_| !self.archive) else {
             return String::new();
         };
-        let size = f.metadata().map(|m| m.len()).unwrap_or(0);
-        let len = FINGERPRINT_BYTES.min(size) as usize;
-        if len == 0 {
-            return "0:".into();
-        }
-        let mut head = vec![0u8; len];
-        let n = read_at_full(f, &mut head);
-        head.truncate(n);
-        format!("{}:{}", head.len(), sha1_hex(&head))
+        fingerprint_of(f)
     }
 
     fn fingerprint_matches(&self, stored: &str) -> bool {
-        let Some((len, hash)) = stored.split_once(':') else {
-            return true; // no fingerprint recorded: trust inode + size
-        };
-        let len = crate::config::php_str_int(len);
-        if len <= 0 {
-            return true;
+        match self.file.as_ref() {
+            Some(f) => fingerprint_matches_file(f, self.size, stored),
+            None => false,
         }
-        if (self.size as i64) < len {
-            return false;
-        }
-        let Some(f) = self.file.as_ref() else {
-            return false;
-        };
-        let mut head = vec![0u8; len as usize];
-        let n = read_at_full(f, &mut head);
-        head.truncate(n);
-        sha1_hex(&head) == hash
     }
 
     fn read_plain(&mut self) -> Result<Option<Vec<u8>>> {
-        let Some(f) = self.file.as_mut() else {
-            return Ok(None);
+        let f = match self.rotated.as_mut() {
+            Some(r) => &mut r.file,
+            None => match self.file.as_mut() {
+                Some(f) => f,
+                None => return Ok(None),
+            },
         };
         let mut chunk = vec![0u8; CHUNK];
         let mut n = 0;
@@ -491,7 +581,7 @@ impl LogSource {
                 continue;
             }
             if self.eof {
-                if self.gzip && !self.buf.is_empty() {
+                if self.archive && !self.buf.is_empty() {
                     // archives: the last line may lack "\n"
                     let mut end = self.buf.len();
                     while end > 0 && self.buf[end - 1] == b'\r' {
@@ -508,7 +598,7 @@ impl LogSource {
                 }
                 return Ok(false);
             }
-            let chunk = if self.gzip {
+            let chunk = if self.gz.is_some() {
                 let path = self.path.clone();
                 match self.gz.as_mut() {
                     Some(g) => g.read_chunk(&path)?,
@@ -518,6 +608,15 @@ impl LogSource {
                 self.read_plain()?
             };
             match chunk {
+                None if self.rotated.is_some() => {
+                    // the previous file is finished (a last line without "\n" is
+                    // dropped: the writer has moved to the new file): switch
+                    self.rotated = None;
+                    self.buf.clear();
+                    self.pos = 0;
+                    self.skipping = false;
+                    self.offset = 0;
+                }
                 None => self.eof = true,
                 Some(c) => {
                     if self.buf.is_empty() {
@@ -544,7 +643,40 @@ impl LogSource {
     pub fn close(&mut self) {
         self.file = None;
         self.gz = None;
+        self.rotated = None;
     }
+}
+
+/// `"<len>:<sha1 of the first len bytes>"` of an open file (len = min(256, size)).
+fn fingerprint_of(f: &File) -> String {
+    let size = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let len = FINGERPRINT_BYTES.min(size) as usize;
+    if len == 0 {
+        return "0:".into();
+    }
+    let mut head = vec![0u8; len];
+    let n = read_at_full(f, &mut head);
+    head.truncate(n);
+    format!("{}:{}", head.len(), sha1_hex(&head))
+}
+
+/// True when the first bytes of `f` (of size `size`) match a stored fingerprint
+/// (always true without one: inode and size are trusted).
+fn fingerprint_matches_file(f: &File, size: u64, stored: &str) -> bool {
+    let Some((len, hash)) = stored.split_once(':') else {
+        return true;
+    };
+    let len = crate::config::php_str_int(len);
+    if len <= 0 {
+        return true;
+    }
+    if (size as i64) < len {
+        return false;
+    }
+    let mut head = vec![0u8; len as usize];
+    let n = read_at_full(f, &mut head);
+    head.truncate(n);
+    sha1_hex(&head) == hash
 }
 
 fn read_at_full(f: &File, buf: &mut [u8]) -> usize {

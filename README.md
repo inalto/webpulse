@@ -1,6 +1,6 @@
 # WebPulse
 
-**Lightweight, log-based web analytics for cPanel & WHM.**
+**Lightweight, log-based web analytics for cPanel & WHM, and for any Apache or nginx server (with a Cockpit module).**
 
 WebPulse reads the access logs that Apache or Nginx already write for every domain on a cPanel
 server and turns them into a modern, privacy-friendly dashboard. There is no JavaScript tracker
@@ -39,6 +39,12 @@ administrator gets a WHM plugin to switch collection on and off per account or d
 - **PDF report of every tab** (print-based, no dependencies). **Download PDF** opens a printable
   report of the selected domain and range (in WHM also a server report) and offers *Save as PDF*.
 - **Light and dark theme**, works on a phone.
+- **Also without cPanel.** On a plain AlmaLinux/Rocky/RHEL/Debian/Ubuntu server WebPulse finds the sites
+  in the Apache and nginx configuration and shows the dashboard in **Cockpit** (*Web analytics*):
+  `install.sh --standalone` ([wiki: Standalone Install](https://github.com/inalto/webpulse/wiki/Standalone-Install),
+  [Cockpit Module](https://github.com/inalto/webpulse/wiki/Cockpit-Module)).
+
+<!-- screenshot placeholder: docs/screenshots/cockpit-1280-light.png (WebPulse inside Cockpit) -->
 
 ![WHM server view](docs/screenshots/server-1280-dark.png)
 
@@ -74,6 +80,12 @@ Run as root:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | bash
+```
+
+On a server **without cPanel** (Apache or nginx; Cockpit recommended for the dashboard):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inalto/webpulse/main/install.sh | bash -s -- --standalone
 ```
 
 To pass flags, add `bash -s --`:
@@ -114,7 +126,9 @@ want to build it yourself?** `install.sh --build` downloads the source and runs 
 | `--update` | Update an existing installation in place. Safe to repeat. |
 | `--uninstall` | Remove plugins, hooks, cron and code. Keeps `/var/webpulse` and `/etc/webpulse`. |
 | `--purge` | With `--uninstall`: also delete `/var/webpulse` (all statistics) and `/etc/webpulse`. |
-| `--standalone` | No cPanel: install only the CLI and the dev server. |
+| `--standalone` | No cPanel: a full installation for an Apache/nginx server (sites from the web server configuration, cron, the Cockpit module when Cockpit is installed). See [Standalone Install](https://github.com/inalto/webpulse/wiki/Standalone-Install). |
+| `--cockpit` | Install the Cockpit module ("Web analytics"), also on a cPanel server running Cockpit. |
+| `--serve` | Install and start `webpulse-serve.service` (dashboard on `127.0.0.1:8099`, token in `/etc/webpulse/serve-token`; put a TLS reverse proxy in front). |
 | `--all-themes` | Install the cPanel plugin into every directory under `/usr/local/cpanel/base/frontend/`. By default it is installed into every theme that has a `dynamicui.conf` (Jupiter, Meridian). |
 | `--theme <name>` | Also install the cPanel plugin into this theme (repeatable). |
 | `-y`, `--yes` | Do not ask for confirmation (implied when stdin is not a terminal). |

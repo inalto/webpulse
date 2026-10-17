@@ -89,7 +89,7 @@ pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
             reg.delete_summary(&user, None)?;
             if let Some(acc) = reg.account(&user)?
                 && acc.removed_at.is_some()
-                && !app.cpanel_users().exists(&user)
+                && !app.provider().exists(&user)
             {
                 fs::remove_tree(&dir, None);
                 reg.forget_account(&user)?;

@@ -82,6 +82,9 @@ pub struct Paths {
     home_root: PathBuf,
     cron_file: PathBuf,
     geoip_dir: PathBuf,
+    cpanel_marker: PathBuf,
+    apache_conf_dirs: Vec<PathBuf>,
+    nginx_conf: PathBuf,
 }
 
 impl Paths {
@@ -124,6 +127,19 @@ impl Paths {
             home_root: dir("home_root"),
             cron_file: PathBuf::from(s("cron_file")),
             geoip_dir,
+            cpanel_marker: PathBuf::from(s("cpanel_marker")),
+            apache_conf_dirs: cfg
+                .get("paths.apache_conf_dirs")
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter(|d| !d.is_empty())
+                        .map(|d| PathBuf::from(rtrim_slash(d)))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            nginx_conf: PathBuf::from(s("nginx_conf")),
         }
     }
 
@@ -174,6 +190,21 @@ impl Paths {
     /// Cron file whose presence `status` reports (`paths.cron_file`).
     pub fn cron_file(&self) -> &Path {
         &self.cron_file
+    }
+
+    /// File whose existence means "this is a cPanel server" (`paths.cpanel_marker`,
+    /// default `/usr/local/cpanel/cpanel`).
+    pub fn cpanel_marker(&self) -> &Path {
+        &self.cpanel_marker
+    }
+    /// Apache configuration roots probed in standalone mode (`paths.apache_conf_dirs`,
+    /// default `/etc/httpd` (EL) and `/etc/apache2` (Debian)).
+    pub fn apache_conf_dirs(&self) -> &[PathBuf] {
+        &self.apache_conf_dirs
+    }
+    /// Main nginx configuration file probed in standalone mode (`paths.nginx_conf`).
+    pub fn nginx_conf(&self) -> &Path {
+        &self.nginx_conf
     }
 
     /// `<data_dir>/<user>`; panics on an invalid name — callers validate first

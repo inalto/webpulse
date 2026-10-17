@@ -52,6 +52,22 @@ pub fn passwd(user: &str) -> Option<(u32, u32, String)> {
     Some((pw.pw_uid, pw.pw_gid, dir))
 }
 
+/// Name of a uid in the password database, `None` when unknown.
+pub fn user_name(uid: u32) -> Option<String> {
+    let mut buf = vec![0 as libc::c_char; 16384];
+    // SAFETY: zeroed passwd struct is a valid out-parameter for getpwuid_r.
+    let mut pw: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: all pointers are valid for the duration of the call (see `passwd`).
+    let rc = unsafe { libc::getpwuid_r(uid, &mut pw, buf.as_mut_ptr(), buf.len(), &mut result) };
+    if rc != 0 || result.is_null() || pw.pw_name.is_null() {
+        return None;
+    }
+    // SAFETY: pw_name points into buf, NUL-terminated by getpwuid_r.
+    let name = unsafe { std::ffi::CStr::from_ptr(pw.pw_name) };
+    Some(name.to_string_lossy().into_owned())
+}
+
 /// uid of a user name, or `None` when unknown.
 pub fn user_id(user: &str) -> Option<u32> {
     passwd(user).map(|p| p.0)

@@ -1,0 +1,5 @@
+server {
+	listen 80;
+	server_name legacy.example.com;
+	access_log /var/log/nginx/legacy.access.log combined buffer=32k flush=5m;
+}

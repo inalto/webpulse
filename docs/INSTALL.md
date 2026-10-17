@@ -34,7 +34,9 @@ and an archive containing symbolic or hard links is refused before it is unpacke
 | `--update`            | update an existing installation; safe to repeat |
 | `--uninstall`         | remove everything WebPulse registered; statistics and config are kept |
 | `--purge`             | with `--uninstall`: also delete `/var/webpulse` and `/etc/webpulse` |
-| `--standalone`        | no cPanel: install only the CLI and the dev server (no plugins, hooks or cron) |
+| `--standalone`        | no cPanel: full installation for an Apache/nginx server (config with `"mode": "standalone"`, cron without the hook line, the Cockpit module when Cockpit is installed); see `docs/STANDALONE-COCKPIT.md` and the wiki page Standalone-Install |
+| `--cockpit`           | install the Cockpit module in `/usr/share/cockpit/webpulse` (also on cPanel servers running Cockpit) |
+| `--serve`             | install and start `webpulse-serve.service` (systemd; `serve --listen 127.0.0.1:8099 --token-file /etc/webpulse/serve-token`) |
 | `--all-themes`        | install the cPanel plugin into every directory under `/usr/local/cpanel/base/frontend/`; by default every theme with a `dynamicui.conf` (Jupiter, Meridian) is installed |
 | `--theme <name>`      | additionally install into this theme (repeatable) |
 | `-y`, `--yes`         | do not ask for confirmation (also implied when stdin is not a terminal, as with `curl \| bash`) |

@@ -8,6 +8,7 @@ One entry point in the binary, `http::api::dispatch(&Ctx, &Request, &Principal) 
 | cPanel plugin `cpanel/webpulse/api.live.php` (PHP shim → `webpulse cgi --principal user:U --api`) | `api.live.php?a=…` | `user` (from LiveAPI) |
 | WHM plugin `whm/cgi/api.cgi` (bash → `webpulse cgi --whm --api`) | `api.cgi?a=…`        | `admin` (root) or `reseller` |
 | Dev server `webpulse serve`                | `/api?a=…`                      | from `--user` / `--admin` |
+| Cockpit module (`ui/cockpit.js`: `cockpit.spawn` → `webpulse cgi --cockpit --api`, query string in `QUERY_STRING`) | `?a=…` | effective uid: root → `admin`, else `user` (the sites it owns) |
 
 All responses are `application/json; charset=utf-8`, shape
 `{"ok":true,"data":…,"meta":{"took_ms":12,"generated_at":"…"}}` or
@@ -127,6 +128,16 @@ Same rows as `report` without limit (max 10 000 rows), `text/csv`,
 Read/write `/var/webpulse/data/<user>/user/settings.json` (see DATA-MODEL.md).
 Only `user` principals may save (the dev server's `--user` principal included,
 so the Settings tab is testable); admin and reseller get 403, an empty body 400.
+
+### `a=whoami`
+Every principal. Cheap: no database is opened. The Cockpit module asks it before it
+starts the dashboard (its page is generated once and holds no principal).
+```json
+{"principal": {"type": "user", "name": "alice"}, "version": "0.6.0", "mode": "standalone"}
+```
+`mode` is the discovery mode (`cpanel` or `standalone`). Admin and reseller
+principals also get `hostname`; `geoip_credit` (`{text, url}`) is present while
+a DB-IP database is in use. (`a=ping` remains: `{version, principal}`.)
 
 ## Actions (admin scope — `admin` and `reseller` principals)
 

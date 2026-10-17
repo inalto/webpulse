@@ -103,6 +103,8 @@ struct SrcStat {
     bad: i64,
     ignored: i64,
     offset: u64,
+    /// Inode `offset` belongs to (a rotated live log is finished before the new file).
+    inode: u64,
     last_ts: Option<i64>,
     max_ts: Option<i64>,
 }
@@ -113,6 +115,7 @@ struct Head {
     scratch: Vec<u8>,
     hit: HitRef,
     offset: u64,
+    inode: u64,
     valid: bool,
 }
 
@@ -197,7 +200,7 @@ impl<'a> Collector<'a> {
 
     /// Discovery → registry for one user (or all users); returns the users seen.
     pub fn sync_registry(&self, only_user: Option<&str>) -> Result<Vec<String>> {
-        let cp = self.app.cpanel_users();
+        let cp = self.app.provider();
         let reg = self.app.registry()?;
         let users = match only_user {
             Some(u) => {
@@ -220,7 +223,7 @@ impl<'a> Collector<'a> {
                 .iter()
                 .map(|(d, k)| (d.clone(), k.clone()))
                 .collect();
-            for d in self.log_files.domains_in_user_dirs(user) {
+            for d in cp.extra_domains(user) {
                 if !domains.iter().any(|(x, _)| *x == d) {
                     domains.push((d, "unknown".into()));
                 }
@@ -287,19 +290,17 @@ impl<'a> Collector<'a> {
         Ok(tot)
     }
 
-    /// True when cPanel lists `domain` for `user` (`/var/cpanel/users/<user>` or
-    /// `/etc/userdomains`); registry rows alone do not count.
+    /// True when discovery lists `domain` for `user` (cPanel: `/var/cpanel/users/<user>`
+    /// or `/etc/userdomains`; standalone: a site of that owner); registry rows alone
+    /// do not count.
     pub fn owns_domain(&self, user: &str, domain: &str) -> bool {
-        self.app
-            .cpanel_users()
-            .domains_of(user)
-            .contains_key(domain)
+        self.app.provider().domains_of(user).contains_key(domain)
     }
 
     /// Live logs of a domain that may be read for `user`: per-account directories
     /// always, shared directories only when the domain belongs to the account.
     fn live_files(&self, user: &str, domain: &str) -> Vec<LogFile> {
-        let files = self.log_files.for_domain(user, domain);
+        let files = self.app.provider().live_logs(user, domain);
         let shared: Vec<String> = files
             .iter()
             .filter(|f| f.shared)
@@ -425,6 +426,14 @@ impl<'a> Collector<'a> {
                     f.path.display()
                 ));
             }
+            if let Some((old, off)) = src.rotated_from() {
+                stats.resets.push(format!("{}:rotated", basename(&f.path)));
+                app.log.info(format!(
+                    "log {} was rotated: finishing {} from offset {off}, then the new file from 0",
+                    f.path.display(),
+                    old.display()
+                ));
+            }
             sources.push(src);
         }
         stats.files = sources.len() as i64;
@@ -533,12 +542,12 @@ impl<'a> Collector<'a> {
                 domains.push(r.domain);
             }
         }
-        for d in self.app.cpanel_users().domains_of(user).into_keys() {
+        for d in self.app.provider().domains_of(user).into_keys() {
             if !domains.contains(&d) {
                 domains.push(d);
             }
         }
-        let archives = self.log_files.archives(user, &domains, archive_dir);
+        let archives = self.app.provider().archives(user, &domains, archive_dir);
         let (settings, _) = UserSettings::read(&self.app.paths, user);
         for (domain, list) in archives {
             if only_domain.map(|o| o != domain).unwrap_or(false) {
@@ -548,13 +557,8 @@ impl<'a> Collector<'a> {
                 tot.skipped.push(format!("{domain} (disabled)"));
                 continue;
             }
-            let r = match self.backfill_domain(
-                user,
-                &domain,
-                &list,
-                &settings,
-                archive_dir.is_some(),
-            ) {
+            let trusted = archive_dir.is_some() || self.app.provider().archives_trusted();
+            let r = match self.backfill_domain(user, &domain, &list, &settings, trusted) {
                 Ok(r) => r,
                 Err(e) => {
                     tot.errors += 1;
@@ -630,7 +634,12 @@ impl<'a> Collector<'a> {
         }
         let mut sources: Vec<LogSource> = Vec::new();
         let mut resume: Vec<i64> = Vec::new();
-        let account_uid = crate::util::fs::user_id(user);
+        // standalone archives come from root-managed configuration: no per-account owner
+        let account_uid = if app.provider().archives_trusted() {
+            None
+        } else {
+            crate::util::fs::user_id(user)
+        };
         for a in archives {
             let key = a.path.display().to_string();
             let prev = done.get(&key);
@@ -641,8 +650,7 @@ impl<'a> Collector<'a> {
                 stats.skipped_files += 1;
                 continue;
             }
-            let mut src =
-                LogSource::new(&a.path, a.https, None, true).with_account_uid(account_uid);
+            let mut src = LogSource::archive(&a.path, a.https).with_account_uid(account_uid);
             if let Err(e) = src.open() {
                 if let Some(u) = e.downcast_ref::<crate::engine::logsource::UntrustedArchive>() {
                     app.log.warn(format!("skipping archive: {u}"));
@@ -653,7 +661,13 @@ impl<'a> Collector<'a> {
                     .error(format!("cannot read archive {}: {e}", a.path.display()));
                 continue;
             }
-            resume.push(prev.map(|p| p.2.unwrap_or(0)).unwrap_or(0));
+            let mut from = prev.map(|p| p.2.unwrap_or(0)).unwrap_or(0);
+            if let Some(stream) = &a.stream {
+                // logrotate renames (access_log.1 -> access_log.2.gz, -20261017 ->
+                // -20261017.gz): what any file of the stream imported is not imported again
+                from = from.max(stream_watermark(&done, stream));
+            }
+            resume.push(from);
             sources.push(src);
         }
         stats.files = sources.len() as i64;
@@ -808,6 +822,28 @@ impl<'a> Collector<'a> {
     }
 }
 
+/// Newest line imported from any archive of a live log's rotation stream
+/// (`<log>-…`, `<log>.N`, `.gz` or not).
+fn stream_watermark(done: &BTreeMap<String, (i64, i64, Option<i64>)>, stream: &Path) -> i64 {
+    let s = stream.display().to_string();
+    let Some(name) = stream.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        return 0;
+    };
+    let dir = stream
+        .parent()
+        .map(|d| d.display().to_string())
+        .unwrap_or_default();
+    done.iter()
+        .filter(|(p, _)| {
+            p.as_str() != s
+                && p.strip_prefix(&format!("{dir}/{name}"))
+                    .is_some_and(|rest| super::standalone::is_rotation_suffix(rest, true))
+        })
+        .filter_map(|(_, v)| v.2)
+        .max()
+        .unwrap_or(0)
+}
+
 fn checkpoint_rows(sources: &[LogSource], st: &[SrcStat], now: i64) -> Vec<CheckpointRow> {
     sources
         .iter()
@@ -815,12 +851,14 @@ fn checkpoint_rows(sources: &[LogSource], st: &[SrcStat], now: i64) -> Vec<Check
         .map(|(i, s)| {
             let x = st.get(i).cloned().unwrap_or_default();
             let off = x.offset as i64;
+            let inode = if x.inode == 0 { s.inode() } else { x.inode };
+            let (size, first_line) = s.checkpoint_of(inode);
             CheckpointRow {
                 path: s.path().display().to_string(),
-                inode: s.inode() as i64,
+                inode: inode as i64,
                 offset: off,
-                size: (s.size() as i64).max(off),
-                first_line: s.fingerprint(),
+                size: (size as i64).max(off),
+                first_line,
                 last_ts: x.last_ts,
                 lines: x.lines,
                 bad_lines: x.bad,
@@ -876,6 +914,7 @@ fn run_merged(
         .iter()
         .map(|s| SrcStat {
             offset: s.offset(),
+            inode: s.current_inode(),
             ..SrcStat::default()
         })
         .collect();
@@ -907,6 +946,7 @@ fn run_merged(
                         Some(h) => {
                             head.hit = h;
                             head.offset = sources[i].offset();
+                            head.inode = sources[i].current_inode();
                             head.valid = true;
                             return;
                         }
@@ -925,6 +965,7 @@ fn run_merged(
         }
         head.valid = false;
         src[i].offset = sources[i].offset();
+        src[i].inode = sources[i].current_inode();
     };
     for i in 0..n {
         fill(i, &mut heads, &mut src, sources, counts, run, parser);
@@ -954,6 +995,7 @@ fn run_merged(
             }
         }
         src[b].offset = heads[b].offset;
+        src[b].inode = heads[b].inode;
         src[b].last_ts = Some(ts);
         if ts > src[b].max_ts.unwrap_or(0) {
             src[b].max_ts = Some(ts);

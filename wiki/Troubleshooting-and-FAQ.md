@@ -157,8 +157,9 @@ the visits log is limited by `raw_retention_days`.
 
 **Can I keep the data when I uninstall?** Yes. Without `--purge`, `/var/webpulse` stays.
 
-**Can I run it without cPanel?** Only for development: `install.sh --standalone` and `webpulse serve`
-([[Development]]).
+**Can I run it without cPanel?** Yes, since 0.6.0: `install.sh --standalone` on any Apache or nginx
+server, with the dashboard in Cockpit ([[Standalone Install]], [[Cockpit Module]]). `webpulse sites`
+explains which sites it found and why one is not collected.
 
 **Numbers differ from another tool?** See [[Metrics and Definitions]].
 

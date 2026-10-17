@@ -56,6 +56,12 @@
 
 ### Collector pipeline (`webpulse collect`)
 
+Discovery goes through `engine::discovery::Provider` (0.6.0): `CpanelProvider`
+(below) or `StandaloneProvider` on servers without cPanel (`mode` in config.json;
+sites from config `sites`, Apache and nginx, see
+[STANDALONE-COCKPIT.md](STANDALONE-COCKPIT.md)). The rest of the pipeline is the
+same for both.
+
 1. **Discovery** builds the list of `(user, domain, [logfiles])` triples:
    * users: directory names in `/var/cpanel/users/` (skip `system`, dotfiles);
      `OWNER=` line gives the reseller, `DNS=`/`DNS<n>=` the domains;
@@ -71,7 +77,10 @@
      (`accounts.enabled` override → global `default_enabled`; then
      `domains.enabled` override).
 2. **LogSource** opens each file at its checkpoint `(inode, offset)`.
-   Rotation/truncation rules: inode changed → start at 0 of the new file;
+   Rotation/truncation rules: inode changed → when the previous file is still
+   next to it under a rotated name (`<log>-<date>`, `<log>.N`, uncompressed,
+   same inode and first bytes) finish it from the stored offset first (0.6.0),
+   then start at 0 of the new file;
    size < offset → file truncated, start at 0; otherwise seek to offset.
    Reads in 1 MiB chunks, never loads a file in memory, stops at the last
    complete line, stores the new offset only after the DB transaction commits.

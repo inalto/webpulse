@@ -221,3 +221,82 @@ fn symlinked_archive_is_refused() {
     let e = s.open().unwrap_err().to_string();
     assert!(e.contains("regular file"), "{e}");
 }
+
+#[test]
+fn rotation_finishes_the_previous_file_before_the_new_one() {
+    use std::os::unix::fs::MetadataExt;
+    for rotated in ["r.log-20261017", "r.log.1"] {
+        let d = dir(&format!("rot-{rotated}"));
+        let f = d.join("r.log");
+        std::fs::write(&f, "a\nb\n").unwrap();
+        let mut s = open(&f, None, false);
+        assert_eq!(read(&mut s), ["a", "b"]);
+        let c = cp(&s);
+        let old_fp = s.fingerprint();
+        s.close();
+        // written after the last run, then logrotate renames and the server reopens
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&f)
+            .unwrap()
+            .write_all(b"c\npartial-without-newline")
+            .unwrap();
+        let old_inode = std::fs::metadata(&f).unwrap().ino();
+        std::fs::rename(&f, d.join(rotated)).unwrap();
+        std::fs::write(&f, "d\ne\n").unwrap();
+        let mut s2 = open(&f, Some(c), false);
+        assert_eq!(s2.reset_reason(), None, "{rotated}");
+        let (from, off) = s2.rotated_from().expect("rotated file found");
+        assert_eq!(from, d.join(rotated));
+        assert_eq!(off, 4);
+        assert_eq!(s2.current_inode(), old_inode);
+        assert_eq!(s2.read_line().unwrap().unwrap(), b"c");
+        // a checkpoint taken now belongs to the old file
+        assert_eq!(s2.current_inode(), old_inode);
+        assert_eq!(s2.offset(), 6);
+        // size and fingerprint of the old file (29 bytes now), not of the new one
+        let (size, fp) = s2.checkpoint_of(old_inode);
+        assert_eq!(size, 29);
+        assert!(fp.starts_with("29:") && fp != old_fp, "{fp}");
+        assert!(s2.checkpoint_of(s2.inode()).1.starts_with("4:"));
+        // then the new file from 0 (the unterminated tail of the old one is dropped)
+        assert_eq!(read(&mut s2), ["d", "e"], "{rotated}");
+        assert_eq!(s2.current_inode(), s2.inode());
+        assert_eq!(s2.offset(), 4);
+    }
+}
+
+#[test]
+fn compressed_or_foreign_rotations_are_not_finished() {
+    let d = dir("rot-gz");
+    let f = d.join("r.log");
+    std::fs::write(&f, "a\nb\n").unwrap();
+    let mut s = open(&f, None, false);
+    read(&mut s);
+    let mut c = cp(&s);
+    s.close();
+    // same inode under a .gz name: a compressed rotation is an archive, not a live tail
+    std::fs::rename(&f, d.join("r.log.1.gz")).unwrap();
+    std::fs::write(&f, "x\n").unwrap();
+    let mut s2 = open(&f, Some(c.clone()), false);
+    assert_eq!(s2.reset_reason(), Some("inode"));
+    assert_eq!(read(&mut s2), ["x"]);
+    // a rotated name whose first bytes differ (another file with a recycled inode)
+    std::fs::rename(d.join("r.log.1.gz"), d.join("r.log.1")).unwrap();
+    c.first_line = Some("4:0000000000000000000000000000000000000000".into());
+    let s3 = open(&f, Some(c), false);
+    assert_eq!(s3.reset_reason(), Some("inode"));
+}
+
+#[test]
+fn plain_archives_for_backfill() {
+    let d = dir("plain-archive");
+    std::fs::write(d.join("x.log.1"), "p1\np2").unwrap();
+    std::fs::write(d.join("x.log.2.gz"), gz(b"g1\ng2\n")).unwrap();
+    let mut a = LogSource::archive(&d.join("x.log.1"), false);
+    a.open().unwrap();
+    assert_eq!(read(&mut a), ["p1", "p2"], "last line without newline kept");
+    let mut b = LogSource::archive(&d.join("x.log.2.gz"), false);
+    b.open().unwrap();
+    assert_eq!(read(&mut b), ["g1", "g2"]);
+}

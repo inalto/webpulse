@@ -161,6 +161,7 @@ fn handle(ctx: &Ctx, r: &Request, p: &Principal, action: &str) -> anyhow::Result
         "user_settings" => user_settings_api::get(ctx, r, p)?,
         "save_user_settings" => user_settings_api::save(ctx, r, p)?,
         "ping" => json!({"version": App::version(), "principal": p.to_json()}),
+        "whoami" => whoami(ctx, p),
         "" => return Err(ApiError::bad_request("Parameter \"a\" is required").into()),
         other => {
             return Err(ApiError::bad_request(&format!(
@@ -171,6 +172,29 @@ fn handle(ctx: &Ctx, r: &Request, p: &Principal, action: &str) -> anyhow::Result
         }
     };
     Ok(Outcome::Data(data))
+}
+
+/// `a=whoami`: who the caller is, cheaply (the Cockpit module asks before it
+/// starts the dashboard): principal, product version, discovery mode, and for
+/// the admin scope the host name; the GeoIP attribution when it is needed.
+pub fn whoami(ctx: &Ctx, p: &Principal) -> Value {
+    let mut v = json!({
+        "principal": p.to_json(),
+        "version": App::version(),
+        "mode": ctx.app.mode().as_str(),
+    });
+    if p.has_admin_scope()
+        && let Some(host) = super::page::hostname()
+    {
+        v["hostname"] = json!(host);
+    }
+    if super::admin_geoip::attribution_needed(ctx) {
+        v["geoip_credit"] = json!({
+            "text": super::admin_geoip::ATTRIBUTION,
+            "url": super::admin_geoip::ATTRIBUTION_URL,
+        });
+    }
+    v
 }
 
 /// The registry, or `None` when it is not readable (cPanel accounts).

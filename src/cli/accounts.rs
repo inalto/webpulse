@@ -100,7 +100,7 @@ pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
         Some(u) if is_valid_user(u) => u,
         _ => return Err(usage("a valid user name is required")),
     };
-    if !app.cpanel_users().exists(user) && reg.account(user)?.is_none() {
+    if !app.provider().exists(user) && reg.account(user)?.is_none() {
         ctx.err(&format!("warning: {user} is not a known cPanel account"));
     }
     let enabled = match action {

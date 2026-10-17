@@ -4,6 +4,48 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-10-17
+
+### Added
+- **Standalone mode** for servers without cPanel (AlmaLinux/Rocky/RHEL, Debian/Ubuntu). New
+  `mode` setting in config.json (`auto` by default: cPanel when `/usr/local/cpanel/cpanel` or
+  `/var/cpanel/users` exists, else standalone; `cpanel`; `standalone`). Discovery has two
+  providers: cPanel (unchanged) and standalone, which builds the sites from, in order of
+  precedence, the new `sites` array of config.json (`domain`, `owner`, `logs`, `archives`,
+  `aliases`), the Apache configuration (EL `/etc/httpd`, Debian `/etc/apache2`: `Include`,
+  `<VirtualHost>`, `ServerName`/`ServerAlias`, `CustomLog`/`TransferLog` with `LogFormat`
+  nicknames, `Define`/`envvars` variables, `SuexecUserGroup`/`AssignUserID` or the document
+  root's owner) and the nginx configuration (`/etc/nginx/nginx.conf`: `include`, `log_format`,
+  `server_name`, `access_log`). Combined-compatible formats only (combined, combinedio,
+  vhost_combined, nginx `main`); others are reported. Sites are grouped by owner into accounts
+  (`local` without one), stored as `/var/webpulse/data/<owner>/<domain>.db` with the usual
+  modes; registry domains have the kind `site`. Paths: `paths.cpanel_marker`,
+  `paths.apache_conf_dirs`, `paths.nginx_conf`.
+- `webpulse sites [--json]`: what discovery found (source, domain, aliases, owner, log files with
+  exists/readable/first-line checks, archives) and why a site is not collected.
+- Log rotation without loss: when a live log's inode changed and the previous file is still in the
+  directory under a rotated name (`<log>-<date>`, `<log>.N`), the collector first finishes it from
+  the stored offset, then reads the new file from the start. Backfill in standalone mode reads
+  the rotated files (`<log>-*`, `<log>.N`, plain or `.gz`, or the configured `archives`
+  pattern), never twice even when logrotate renames or compresses them later.
+- `webpulse serve --listen ADDR:PORT --token-file PATH [--allow-host HOST]`: the dashboard on any
+  address with a persistent access token (created 0600), for a TLS reverse proxy in front.
+- **Cockpit module** ("Web analytics" in Cockpit's menu): `install.sh --cockpit` installs
+  `/usr/share/cockpit/webpulse` (`manifest.json`, `index.html` from the new
+  `webpulse page --cockpit`). The page runs `webpulse cgi --cockpit --api` through
+  `cockpit.spawn` (no listener, no token): with Cockpit's administrative access the
+  administrator view, otherwise the logged-in user's own sites. Follows Cockpit's dark style;
+  CSV export and the printable report work inside the Cockpit frame.
+- `webpulse cgi --cockpit`: principal from the effective uid (root → admin, any other user →
+  that user's sites).
+- API action `whoami` (principal, version, discovery mode).
+- Installer: `install.sh --standalone` is a full installation (binary, config with
+  `"mode": "standalone"`, setup, cron without the hook line, the Cockpit module when Cockpit is
+  installed, a `webpulse sites` summary); `--serve` installs `webpulse-serve.service`
+  (systemd, 127.0.0.1:8099, token in `/etc/webpulse/serve-token`). `--update` keeps a standalone
+  installation standalone and regenerates the Cockpit page; `--uninstall` removes the module
+  and the unit. The release tarball contains `cockpit/`.
+
 ## [0.5.0] - 2026-10-17
 
 ### Added

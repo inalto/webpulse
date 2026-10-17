@@ -31,7 +31,8 @@
       if (go) { l.type = 'button'; l.title = ctx.t('geo.hero'); l.addEventListener('click', go); }
     };
     line('Cron job', o.collector.cron_installed);
-    line('Stats hook', o.collector.hook_installed);
+    // no cPanel hooks on a standalone server
+    if (ctx.mode !== 'standalone') line('Stats hook', o.collector.hook_installed);
     line('GeoIP' + (o.collector.geoip.db_date ? ' (' + o.collector.geoip.db_date + ')' : ''), o.collector.geoip.enabled && !!o.collector.geoip.db_date, onGeo);
   }
 

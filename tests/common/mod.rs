@@ -134,7 +134,7 @@ fn deep_merge(base: &mut Value, patch: &Value) {
     }
 }
 
-fn copy_dir(src: &Path, dst: &Path) {
+pub fn copy_dir(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for e in std::fs::read_dir(src).unwrap() {
         let e = e.unwrap();
@@ -196,6 +196,40 @@ impl FakeRoot {
             std::fs::create_dir_all(fr.path(d)).unwrap();
         }
         let mut cfg = fr.default_config();
+        deep_merge(&mut cfg, &config);
+        fr.write_config(&cfg);
+        fr
+    }
+
+    /// A standalone server (no cPanel files) under tests/tmp/<name>/: `mode` is
+    /// `standalone`, Apache is read from `<root>/etc/httpd`, nginx from
+    /// `<root>/etc/nginx/nginx.conf`, the cPanel marker points into the root.
+    pub fn create_standalone(name: &str, config: Value) -> FakeRoot {
+        let dir = repo().join("tests/tmp").join(name);
+        rm(&dir);
+        let fr = FakeRoot { dir, now: None };
+        for d in [
+            "var/webpulse",
+            "var/log/httpd",
+            "var/log/nginx",
+            "etc/cron.d",
+        ] {
+            std::fs::create_dir_all(fr.path(d)).unwrap();
+        }
+        let r = fr.root().display().to_string();
+        let mut cfg = fr.default_config();
+        deep_merge(
+            &mut cfg,
+            &json!({
+                "mode": "standalone",
+                "paths": {
+                    "cpanel_marker": format!("{r}/usr/local/cpanel/cpanel"),
+                    "cpanel_users_dir": format!("{r}/var/cpanel/users"),
+                    "apache_conf_dirs": [format!("{r}/etc/httpd")],
+                    "nginx_conf": format!("{r}/etc/nginx/nginx.conf"),
+                }
+            }),
+        );
         deep_merge(&mut cfg, &config);
         fr.write_config(&cfg);
         fr

@@ -141,6 +141,8 @@ fn build_release_packs_the_binary_tarball_with_the_installer_layout_and_the_inst
         "whm/templates/webpulse/index.tmpl",
         "hooks/stats_runall_pre.sh",
         "hooks/stats_runuser_pre.sh",
+        "cockpit/manifest.json",
+        "cockpit/README.md",
     ] {
         assert_contains(&listing, &format!("{name}/{f}\n"), "archive content");
     }

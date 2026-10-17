@@ -36,6 +36,7 @@ pub fn run(ctx: &Ctx, _args: &Args) -> Result<i32> {
     let mut st = json!({
         "version": App::version(),
         "php": Value::Null,
+        "mode": app.mode().as_str(),
         "config": {"path": app.config_path().map(|p| p.display().to_string()), "error": app.config.load_error()},
         "paths": {},
         "registry": {"ok": false, "error": Value::Null},
@@ -149,6 +150,10 @@ pub fn run(ctx: &Ctx, _args: &Args) -> Result<i32> {
         l.push(format!(
             "config:      {}{cfg_err}",
             st["config"]["path"].as_str().unwrap_or("(defaults)")
+        ));
+        l.push(format!(
+            "mode:        {}",
+            st["mode"].as_str().unwrap_or("")
         ));
         if let Some(m) = st["paths"].as_object() {
             for (k, v) in m {

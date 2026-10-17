@@ -11,6 +11,7 @@ pub mod registry;
 pub mod rollup;
 pub mod run;
 pub mod session;
+pub mod standalone;
 pub mod store;
 pub mod update;
 pub mod user_settings;

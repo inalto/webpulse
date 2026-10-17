@@ -5,6 +5,8 @@
 - [[Installation]]
 - [[Updating and Uninstalling]]
 - [[Manual Installation]]
+- [[Standalone Install]]
+- [[Cockpit Module]]
 - [[Troubleshooting and FAQ]]
 
 **Using WebPulse**

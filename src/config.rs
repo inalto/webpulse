@@ -18,6 +18,7 @@ use crate::util::{ip, json, strs, time};
 /// prints them in this order).
 pub const DEFAULTS_JSON: &str = r#"{
   "version": 1,
+  "mode": "auto",
   "default_enabled": true,
   "timezone": null,
   "raw_retention_days": 30,
@@ -53,14 +54,19 @@ pub const DEFAULTS_JSON: &str = r#"{
     "cpanel_userdata_dir": "/var/cpanel/userdata",
     "home_root": "/home",
     "cron_file": "/etc/cron.d/webpulse",
-    "hooks_file": "/var/cpanel/hooks.yaml"
-  }
+    "hooks_file": "/var/cpanel/hooks.yaml",
+    "cpanel_marker": "/usr/local/cpanel/cpanel",
+    "apache_conf_dirs": ["/etc/httpd", "/etc/apache2"],
+    "nginx_conf": "/etc/nginx/nginx.conf"
+  },
+  "sites": []
 }"#;
 
 /// Content `webpulse setup` writes when no configuration file exists and
 /// `<install>/etc/config.json.default` cannot be read (same as that file in 0.1.0).
 pub const FILE_DEFAULT_JSON: &str = r#"{
   "version": 1,
+  "mode": "auto",
   "default_enabled": true,
   "timezone": null,
   "raw_retention_days": 30,
@@ -82,8 +88,12 @@ pub const FILE_DEFAULT_JSON: &str = r#"{
     "archive_dir": "/home/{user}/logs",
     "userdomains_file": "/etc/userdomains",
     "cpanel_users_dir": "/var/cpanel/users",
-    "home_root": "/home"
-  }
+    "home_root": "/home",
+    "cpanel_marker": "/usr/local/cpanel/cpanel",
+    "apache_conf_dirs": ["/etc/httpd", "/etc/apache2"],
+    "nginx_conf": "/etc/nginx/nginx.conf"
+  },
+  "sites": []
 }
 "#;
 
@@ -666,7 +676,8 @@ mod tests {
         );
         let keys: Vec<&String> = c.effective().as_object().unwrap().keys().collect();
         assert_eq!(keys[0], "version");
-        assert_eq!(keys[11], "static_prefixes");
+        assert_eq!(keys[1], "mode");
+        assert_eq!(keys[12], "static_prefixes");
     }
 
     #[test]

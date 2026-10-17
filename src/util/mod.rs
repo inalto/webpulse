@@ -1,6 +1,7 @@
 //! Small helpers shared by the engine, the CLI and the HTTP layer.
 
 pub mod fs;
+pub mod glob;
 pub mod ip;
 pub mod json;
 pub mod lock;

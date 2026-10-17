@@ -1,0 +1,18 @@
+{
+    "version": "0.6.0",
+    "requires": {
+        "cockpit": "266"
+    },
+    "menu": {
+        "index": {
+            "label": "Web analytics",
+            "order": 65,
+            "keywords": [
+                {
+                    "matches": ["webpulse", "analytics", "statistics", "visitors", "traffic", "pageviews", "access log", "apache", "nginx", "httpd"]
+                }
+            ]
+        }
+    },
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:"
+}

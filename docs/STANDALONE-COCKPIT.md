@@ -1,5 +1,10 @@
 # Standalone servers and the Cockpit module — plan
 
+> **Status (0.6.0, 2026-10-17): Phases A and B are implemented** — see
+> [Status and decisions](#status-and-decisions-060) at the end for what was
+> built, where it differs from the plan below and what still needs a real
+> server. Phase C (packages) is open.
+
 Goal: run WebPulse on a plain AlmaLinux/Rocky/RHEL (and Debian/Ubuntu) web
 server without cPanel, and offer the same dashboard as a **Cockpit** module,
 keeping the same basics: one static binary, one SQLite file per site, the
@@ -91,7 +96,7 @@ repo would only duplicate the release pipeline.
   workflow, so `dnf install` works and updates come from the package manager
   instead of the one-click upgrade (which stays for tarball installs).
 
-## Phase B — Cockpit module (target 0.7.0)
+## Phase B — Cockpit module (target 0.7.0, shipped in 0.6.0)
 
 * Files in `cockpit/` installed to `/usr/share/cockpit/webpulse/`:
   * `manifest.json`: `{"version": "<ver>", "requires": {"cockpit": "266"},
@@ -138,3 +143,75 @@ repo would only duplicate the release pipeline.
 * No JavaScript tracker, no own web server with TLS, no own user database:
   authentication is always delegated (cPanel, WHM, Cockpit, or an SSH tunnel
   to `serve`).
+
+## Status and decisions (0.6.0)
+
+Delivered in 0.6.0 together (Phase B was planned for 0.7.0).
+
+**Code map.** `src/engine/standalone/{mod,apache,nginx}.rs` (discovery, precedence,
+archives), `engine::discovery::{Provider, CpanelProvider, StandaloneProvider,
+resolve_mode}`, `App::provider()` (the collector, backfill, `accounts`, `purge` and
+the admin API ask the provider instead of `CpanelUsers`), rotation completion in
+`engine::logsource`, `src/cli/sites.rs`, `src/cli/page.rs`, `cgi --cockpit` and
+`a=whoami` (`src/cli/cgi.rs`, `src/http/api.rs`), `serve --listen/--token-file/
+--allow-host` (`src/cli/serve.rs`, `src/http/dev_server.rs`), `ui/cockpit.js` and
+three hooks in `ui/app.js` (transport, CSV Blob, report in the same frame),
+`cockpit/manifest.json`, installer (`--standalone`, `--cockpit`, `--serve`).
+
+**Decisions and differences from the plan.**
+
+* `mode: auto` is cPanel when `paths.cpanel_marker` exists **or
+  `paths.cpanel_users_dir` is a directory**, so existing configurations that point
+  `cpanel_users_dir` at a fake root (tests, the parity harness, the dev server)
+  stay in cPanel mode without a new key.
+* Rotation completion is not limited to standalone mode: it needs the same inode
+  and the same first bytes under a rotated name, which cPanel's truncation never
+  produces, so cPanel behaviour is unchanged (the parity harness is identical). The
+  unterminated last line of the old file is dropped. A checkpoint written while the
+  old file is being finished records the old inode; the next run resumes there.
+* The Apache main server's logs (`logs/access_log`, Debian's
+  `other_vhosts_access.log`) and nginx's `http`-level logs belong to the **default
+  host** (the machine's host name, or the main `ServerName`). Virtual hosts without
+  a log of their own are reported as not collected (their hits are in the default
+  host's log); a log file shared by several sites is counted for the first one only
+  (no vhost field to split by — splitting `vhost_combined` stays open).
+* Auto-detected sites whose logs all are missing, or none in a combined-compatible
+  format, are not synced to the registry (`webpulse sites` lists them with the
+  reason). Configured `sites` always are.
+* The Apache reader takes the configuration directory as `ServerRoot` and maps
+  absolute includes below the standard root (`/etc/httpd`, `/etc/apache2`, nginx
+  `/etc/nginx`) onto it, so fixture copies work; `ServerRoot` itself is ignored.
+  Configuration files are trusted like the web server trusts them (an included file
+  owned by a user can already run commands as root through piped logs).
+* Standalone archives are root-managed (opened without the per-account owner check
+  of `~/logs`, symlink and hard-link checks kept), may be uncompressed, and are
+  imported "never twice" per rotation stream: a renamed or newly compressed archive
+  (`.1` → `.2.gz`) is skipped up to the newest line already imported from any file
+  of that log's stream (`imported_archives` is unchanged).
+* `webpulse page --cockpit [--bin PATH]` prints the module document (also
+  `cgi --cockpit --page`). The document holds no principal: the adapter asks
+  `a=whoami` (new action, every principal) and `a=domains` first.
+* `webpulse-serve.service` runs `serve … --allow-root`: only root reads every site's
+  statistics. `serve` also accepts `--allow-host` for reverse proxies that keep the
+  public `Host`.
+* The installer keeps a standalone installation standalone on `--update` (and the
+  one-click upgrade) by reading `"mode": "standalone"` from config.json, and
+  regenerates an installed Cockpit module. The shipped config.json gains `mode`,
+  `sites`, `paths.cpanel_marker`, `paths.apache_conf_dirs` and `paths.nginx_conf` so
+  prefixed installs redirect them too.
+
+**Tests.** `tests/engine_standalone.rs` (EL, Debian and nginx fixtures under
+`tests/fixtures/standalone`, precedence, archives, end-to-end collect with dateext
+and numbered rotations, backfill never twice, `sites`, `mode`),
+`tests/engine_logsource.rs` (rotation completion), `tests/http_cockpit.rs`
+(`cgi --cockpit` principals, edge rule, `page --cockpit`, manifest),
+`tests/ui_cockpit.rs` (the adapter in headless Chrome against a mock `cockpit.js`
+whose `spawn` runs the real binary: boot, dark style, CSV Blob, report in the same
+frame with `window.print()`, missing binary), `tests/pkg_installer.rs` (standalone,
+Cockpit, `--serve` with a stub `systemctl`, the real binary with the EL fixture).
+
+**To verify on a real server.** Logging in to Cockpit (menu entry, administrative
+access switching to the admin view, a non-admin user seeing only their sites),
+printing from the Cockpit frame (browsers print the frame `window.print()` is
+called in; not observable in headless Chrome), `webpulse sites` against real
+EL/Debian Apache and nginx configurations as root, and logrotate on a busy site.

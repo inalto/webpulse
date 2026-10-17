@@ -14,6 +14,15 @@
 #   WEBPULSE_APPS_DIR       AppConfig dir (default: $PREFIX/var/cpanel/apps)
 #   WEBPULSE_PLUGINS_DIR    cPanel plugin registry dir (default: $PREFIX/var/cpanel/plugins)
 #   WEBPULSE_SKIP_FIRST_COLLECT=1  do not start the first collect in the background
+#   WEBPULSE_COCKPIT_DIR    Cockpit's package directory (default: $PREFIX/usr/share/cockpit)
+#   WEBPULSE_SYSTEMD_DIR    systemd unit directory (default: $PREFIX/etc/systemd/system)
+#   WEBPULSE_SYSTEMCTL      systemctl to run (default: systemctl; a stub in the tests)
+#
+# Modes: cPanel (default; needs /usr/local/cpanel) and standalone (--standalone,
+# or an existing config.json with "mode": "standalone" on --update): no plugins
+# and no hooks, a cron without the hook drain, the Cockpit module when Cockpit
+# is installed (--cockpit forces it, on cPanel too) and, with --serve, the
+# webpulse-serve.service unit.
 #
 # WebPulse is a single static binary. install.sh obtains the release layout
 # (bin/webpulse, cpanel/, whm/, hooks/, etc/, installer/, VERSION, ...) and sets
@@ -57,6 +66,13 @@ wp_init_env() {
 
     CFG_FILE="$ETC_DIR/config.json"
     CRON_FILE="$CRON_DIR/webpulse"
+    COCKPIT_ROOT="${WEBPULSE_COCKPIT_DIR:-$PREFIX/usr/share/cockpit}"
+    COCKPIT_ROOT="${COCKPIT_ROOT%/}"
+    COCKPIT_DIR="$COCKPIT_ROOT/webpulse"
+    SYSTEMD_DIR="${WEBPULSE_SYSTEMD_DIR:-$PREFIX/etc/systemd/system}"
+    SERVE_UNIT="$SYSTEMD_DIR/webpulse-serve.service"
+    SERVE_TOKEN="$ETC_DIR/serve-token"
+    SYSTEMCTL="${WEBPULSE_SYSTEMCTL:-systemctl}"
     THEME_ROOT="$CPANEL_ROOT/base/frontend"
     CGI_DIR="$CPANEL_ROOT/whostmgr/docroot/cgi/webpulse"
     ADDON_ICON="$CPANEL_ROOT/whostmgr/docroot/addon_plugins/webpulse.png"
@@ -271,7 +287,7 @@ wp_preflight_cpanel() {
 wp_copy_tree() {
     local dest=$1 item
     mkdir -p "$dest"
-    for item in cpanel whm hooks etc installer VERSION LICENSE README.md CHANGELOG.md install.sh uninstall.sh; do
+    for item in cpanel whm hooks cockpit etc installer VERSION LICENSE README.md CHANGELOG.md install.sh uninstall.sh; do
         if [ -e "$SRC/$item" ]; then
             cp -a "$SRC/$item" "$dest/$item"
         fi
@@ -341,9 +357,18 @@ wp_stage_release() {
 # cron_file points at the redirected cron file; placeholders such as {user} stay.
 wp_seed_config() {
     [ -f "$CFG_FILE" ] && return 0
-    [ -z "$PREFIX" ] && [ "$VAR_DIR" = "$DEFAULT_VAR" ] && return 0
     local default="$REL/etc/config.json.default"
     [ -f "$default" ] || return 0
+    if [ -z "$PREFIX" ] && [ "$VAR_DIR" = "$DEFAULT_VAR" ]; then
+        # standalone: seed the shipped default as is, so "mode" can be set before setup
+        if [ "${WP_STANDALONE:-0}" = 1 ]; then
+            mkdir -p "$ETC_DIR"
+            wp_undo rm -f "$CFG_FILE"
+            cp "$default" "$CFG_FILE" || wp_fail "Cannot seed $CFG_FILE from $default"
+            chmod 600 "$CFG_FILE"
+        fi
+        return 0
+    fi
     mkdir -p "$ETC_DIR"
     wp_undo rm -f "$CFG_FILE"
     WP_VAR_DIR="$VAR_DIR" WP_PREFIX="$PREFIX" WP_CRON_FILE="$CRON_FILE" awk '
@@ -371,11 +396,35 @@ inpaths { print rewrite($0); next }
     chmod 600 "$CFG_FILE"
 }
 
+# Sets "mode" in config.json (standalone installs): replaces the value of an
+# existing key, else inserts the key after the opening brace. The binary reads
+# the file at every run; nothing else in the file changes.
+wp_set_mode() { # mode
+    local mode=$1 tmp
+    [ -f "$CFG_FILE" ] || return 0
+    if grep -Eq '"mode"[[:space:]]*:[[:space:]]*"'"$mode"'"' "$CFG_FILE"; then
+        return 0
+    fi
+    tmp="$CFG_FILE.mode.$$"
+    cp -p "$CFG_FILE" "$CFG_FILE.rollback.$$"
+    wp_undo mv -f "$CFG_FILE.rollback.$$" "$CFG_FILE"
+    if grep -Eq '"mode"[[:space:]]*:' "$CFG_FILE"; then
+        sed -E 's/"mode"[[:space:]]*:[[:space:]]*"[^"]*"/"mode": "'"$mode"'"/' "$CFG_FILE" >"$tmp"
+    else
+        awk -v m="$mode" '!done && /\{/ { sub(/\{/, "{\n  \"mode\": \"" m "\","); done = 1 } { print }' "$CFG_FILE" >"$tmp"
+    fi
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$CFG_FILE"
+    wp_ok "config.json: \"mode\": \"$mode\""
+}
+
 wp_run_setup() {
     wp_head "Initialising configuration and data directories"
     wp_seed_config
+    [ "${WP_STANDALONE:-0}" = 1 ] && wp_set_mode standalone
     export WEBPULSE_CONFIG="$CFG_FILE"
     wp_run "bin/webpulse setup" "$REL/bin/webpulse" setup
+    [ "${WP_STANDALONE:-0}" = 1 ] && wp_set_mode standalone
     wp_ok "webpulse setup completed (config: $CFG_FILE, data: $VAR_DIR)"
 }
 
@@ -631,7 +680,12 @@ wp_install_cron() {
     local tmp content_ok=0
     mkdir -p "$CRON_DIR"
     tmp="$CRON_FILE.new.$$"
-    sed "s|/usr/local/webpulse|$(wp_escape_sed "$INSTALL_LINK")|g" "$REL/etc/cron.d/webpulse" >"$tmp"
+    if [ "${WP_STANDALONE:-0}" = 1 ]; then
+        # no cPanel hooks to drain on a standalone server
+        sed "s|/usr/local/webpulse|$(wp_escape_sed "$INSTALL_LINK")|g" "$REL/etc/cron.d/webpulse" | grep -v -- '--hooked' >"$tmp"
+    else
+        sed "s|/usr/local/webpulse|$(wp_escape_sed "$INSTALL_LINK")|g" "$REL/etc/cron.d/webpulse" >"$tmp"
+    fi
     if [ -f "$CRON_FILE" ] && cmp -s "$tmp" "$CRON_FILE"; then
         content_ok=1
     fi
@@ -650,7 +704,129 @@ wp_install_cron() {
     chmod 644 "$tmp"
     wp_chown_root "$tmp"
     mv -f "$tmp" "$CRON_FILE"
-    wp_ok "Installed $CRON_FILE (collect every 5 min, hooked every minute, rollup 02:10)"
+    if [ "${WP_STANDALONE:-0}" = 1 ]; then
+        wp_ok "Installed $CRON_FILE (collect every 5 min, rollup 02:10, GeoIP update monthly)"
+    else
+        wp_ok "Installed $CRON_FILE (collect every 5 min, hooked every minute, rollup 02:10)"
+    fi
+}
+
+# ------------------------------------------------------------- cockpit ---
+
+# The Cockpit module: manifest.json (version of this release) and index.html
+# generated by the binary (`webpulse page --cockpit`), swapped in atomically.
+# Cockpit picks modules up without a restart.
+wp_install_cockpit() {
+    wp_head "Cockpit module"
+    if [ ! -d "$COCKPIT_ROOT" ]; then
+        if [ "${WP_COCKPIT:-0}" = 1 ]; then
+            wp_warn "Cockpit is not installed ($COCKPIT_ROOT is missing): module skipped. Install it (dnf install cockpit / apt install cockpit) and re-run with --update --cockpit."
+            WP_WARNINGS+=("Cockpit module skipped (Cockpit not installed)")
+        else
+            wp_info "Cockpit is not installed: no module (install Cockpit, then: install.sh --update --cockpit)"
+        fi
+        return 0
+    fi
+    [ -f "$REL/cockpit/manifest.json" ] || wp_fail "cockpit/manifest.json missing in the release"
+    local stage="$COCKPIT_ROOT/.webpulse.new.$$" existed=0
+    [ -d "$COCKPIT_DIR" ] && existed=1
+    wp_safe_rm_rf "$stage"
+    mkdir -p "$stage"
+    wp_undo wp_safe_rm_rf "$stage"
+    sed -E 's/"version"[[:space:]]*:[[:space:]]*"[^"]*"/"version": "'"$VERSION"'"/' "$REL/cockpit/manifest.json" >"$stage/manifest.json"
+    if ! "$REL/bin/webpulse" page --cockpit --bin "$INSTALL_LINK/bin/webpulse" >"$stage/index.html" 2>"$stage/.page.err"; then
+        wp_err "Step failed: generate the Cockpit page ($REL/bin/webpulse page --cockpit)"
+        sed 's/^/    | /' "$stage/.page.err" >&2
+        wp_rollback
+        exit 1
+    fi
+    rm -f "$stage/.page.err"
+    chmod 755 "$stage"
+    chmod 644 "$stage/manifest.json" "$stage/index.html"
+    wp_chown_root "$stage"
+    if [ "$existed" = 1 ]; then
+        mv "$COCKPIT_DIR" "$COCKPIT_DIR.rollback.$$"
+        wp_undo mv -f "$COCKPIT_DIR.rollback.$$" "$COCKPIT_DIR"
+        wp_undo wp_safe_rm_rf "$COCKPIT_DIR"
+        mv "$stage" "$COCKPIT_DIR"
+        WP_CLEANUP_PATHS+=("$COCKPIT_DIR.rollback.$$")
+    else
+        mv "$stage" "$COCKPIT_DIR"
+        wp_undo wp_safe_rm_rf "$COCKPIT_DIR"
+    fi
+    WP_COCKPIT_DONE=1
+    wp_ok "Cockpit module installed in $COCKPIT_DIR (Cockpit menu: Web analytics)"
+}
+
+# ---------------------------------------------------------------- serve ---
+
+wp_install_serve() {
+    wp_head "Dashboard service (webpulse serve)"
+    local tmp existed=0 changed=1
+    mkdir -p "$SYSTEMD_DIR" "$ETC_DIR"
+    if [ ! -f "$SERVE_TOKEN" ]; then
+        ( umask 077; od -An -tx1 -N16 /dev/urandom | tr -d ' \n' >"$SERVE_TOKEN" ) \
+            || wp_fail "Cannot create $SERVE_TOKEN"
+        chmod 600 "$SERVE_TOKEN"
+        wp_chown_root "$SERVE_TOKEN"
+        wp_undo rm -f "$SERVE_TOKEN"
+        wp_ok "Access token created: $SERVE_TOKEN (mode 0600)"
+    fi
+    tmp="$SERVE_UNIT.new.$$"
+    cat >"$tmp" <<UNIT
+# WebPulse Analytics - managed by install.sh, edits are overwritten on update.
+[Unit]
+Description=WebPulse Analytics dashboard (webpulse serve)
+After=network.target
+
+[Service]
+Type=simple
+Environment=WEBPULSE_CONFIG=$CFG_FILE
+ExecStart=$INSTALL_LINK/bin/webpulse serve --listen 127.0.0.1:8099 --token-file $SERVE_TOKEN --allow-root
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    chmod 644 "$tmp"
+    if [ -f "$SERVE_UNIT" ]; then
+        existed=1
+        if cmp -s "$tmp" "$SERVE_UNIT"; then
+            changed=0
+            rm -f "$tmp"
+        else
+            cp -f "$SERVE_UNIT" "$SERVE_UNIT.rollback.$$"
+            wp_undo mv -f "$SERVE_UNIT.rollback.$$" "$SERVE_UNIT"
+        fi
+    else
+        wp_undo rm -f "$SERVE_UNIT"
+    fi
+    [ "$changed" = 1 ] && mv -f "$tmp" "$SERVE_UNIT"
+    wp_chown_root "$SERVE_UNIT"
+    wp_ok "$SERVE_UNIT $([ "$changed" = 1 ] && echo installed || echo 'is up to date')"
+    if command -v "$SYSTEMCTL" >/dev/null 2>&1; then
+        wp_try "systemctl daemon-reload" "$SYSTEMCTL" daemon-reload || true
+        if [ "$existed" = 1 ]; then
+            wp_try "restart webpulse-serve" "$SYSTEMCTL" try-restart webpulse-serve.service || true
+        else
+            wp_try "enable webpulse-serve" "$SYSTEMCTL" enable --now webpulse-serve.service \
+                && wp_undo wp_try_quiet "$SYSTEMCTL" disable --now webpulse-serve.service
+        fi
+        WP_SERVE_DONE=1
+    else
+        wp_warn "systemctl not found: start it yourself: $INSTALL_LINK/bin/webpulse serve --listen 127.0.0.1:8099 --token-file $SERVE_TOKEN --allow-root"
+        WP_SERVE_DONE=1
+    fi
+}
+
+# Restarts an installed webpulse-serve.service on --update (new binary).
+wp_refresh_serve() {
+    [ -f "$SERVE_UNIT" ] || return 0
+    WP_SERVE=1
+    wp_install_serve
 }
 
 # ---------------------------------------------------------------- geoip ---
@@ -699,14 +875,41 @@ wp_prune_releases() {
 
 wp_hostname() { hostname -f 2>/dev/null || hostname 2>/dev/null || echo localhost; }
 
+# What discovery found (standalone): the `webpulse sites` table, abridged.
+wp_summary_sites() {
+    local out n
+    out=$(WEBPULSE_CONFIG="$CFG_FILE" "$INSTALL_LINK/bin/webpulse" sites 2>&1) || true
+    [ -n "$out" ] || return 0
+    printf '\n'
+    wp_info "Sites found (webpulse sites):"
+    n=$(printf '%s\n' "$out" | wc -l)
+    printf '%s\n' "$out" | head -n 40 | sed 's/^/      /'
+    [ "$n" -gt 40 ] && wp_info "      ... ($n lines; run: $INSTALL_LINK/bin/webpulse sites)"
+    printf '\n'
+}
+
 wp_summary_install() {
     local host
     host=$(wp_hostname)
     printf '\n%s%sWebPulse %s is installed.%s\n\n' "$C_GREEN" "$C_BOLD" "$VERSION" "$C_OFF"
     if [ "${WP_STANDALONE:-0}" = 1 ]; then
-        wp_info "Standalone mode: CLI and dev server only."
-        wp_info "Try:  $INSTALL_LINK/bin/webpulse status"
-        wp_info "      $INSTALL_LINK/bin/webpulse serve --port 8099 --user <account>"
+        wp_info "Standalone mode: sites from config.json \"sites\", Apache and nginx; no cPanel."
+        if [ "${WP_NO_CRON:-0}" = 1 ]; then
+            wp_warn "--no-cron: nothing collects data until you schedule '$INSTALL_LINK/bin/webpulse collect' yourself."
+        else
+            wp_info "Collection:           every 5 minutes by cron ($CRON_FILE)"
+        fi
+        if [ "${WP_COCKPIT_DONE:-0}" = 1 ]; then
+            wp_info "Cockpit:              https://$host:9090/webpulse   (menu: Web analytics; administrative access shows every site)"
+        fi
+        if [ "${WP_SERVE_DONE:-0}" = 1 ]; then
+            wp_info "Web dashboard:        http://127.0.0.1:8099/?token=<token in $SERVE_TOKEN>  (webpulse-serve.service; put a TLS reverse proxy in front)"
+        elif [ "${WP_COCKPIT_DONE:-0}" != 1 ]; then
+            wp_info "Dashboard:            $INSTALL_LINK/bin/webpulse serve --admin --allow-root   (or re-run with --serve / --cockpit)"
+        fi
+        wp_info "Sites:                $INSTALL_LINK/bin/webpulse sites   (add or fix sites in \"sites\" of $CFG_FILE)"
+        wp_info "Command line:         $INSTALL_LINK/bin/webpulse status"
+        wp_summary_sites
     else
         wp_info "WHM (administrator):  https://$host:2087/cgi/webpulse/index.cgi"
         wp_info "                      or WHM > Plugins > WebPulse Analytics"
@@ -716,6 +919,9 @@ wp_summary_install() {
         if [ "${WP_NO_CRON:-0}" = 1 ]; then
             wp_warn "--no-cron: nothing collects data until you schedule '$INSTALL_LINK/bin/webpulse collect' yourself."
         fi
+    fi
+    if [ "${WP_STANDALONE:-0}" != 1 ] && [ "${WP_COCKPIT_DONE:-0}" = 1 ]; then
+        wp_info "Cockpit:              https://$host:9090/webpulse"
     fi
     wp_info "Config:               $CFG_FILE"
     wp_info "Data:                 $VAR_DIR"
@@ -742,9 +948,24 @@ wp_confirm() { # prompt
 
 # ----------------------------------------------------------- the install ---
 
+# An existing standalone installation stays standalone on --update (and on the
+# one-click upgrade, which runs install.sh --update --ref <tag>).
+wp_detect_mode() {
+    if [ "${WP_STANDALONE:-0}" != 1 ] && [ -f "$CFG_FILE" ] \
+        && grep -Eq '"mode"[[:space:]]*:[[:space:]]*"standalone"' "$CFG_FILE"; then
+        WP_STANDALONE=1
+    fi
+    # an installed Cockpit module is regenerated on every update
+    if [ -f "$COCKPIT_DIR/manifest.json" ]; then
+        WP_COCKPIT=1
+    fi
+}
+
 wp_install() {
     wp_init_env
     wp_preflight_common
+    WP_CLEANUP_PATHS=()
+    wp_detect_mode
     [ "${WP_STANDALONE:-0}" = 1 ] || wp_preflight_cpanel
 
     if [ -e "$INSTALL_LINK/bin/webpulse" ]; then
@@ -760,7 +981,7 @@ wp_install() {
     fi
     wp_info "Source:  ${WP_SOURCE_DESC:-$SRC}"
     wp_info "Target:  $INSTALL_LINK (releases in $RELEASES)"
-    wp_info "Mode:    $([ "${WP_STANDALONE:-0}" = 1 ] && echo 'standalone (CLI + dev server only)' || echo 'cPanel/WHM')"
+    wp_info "Mode:    $([ "${WP_STANDALONE:-0}" = 1 ] && echo 'standalone (Apache/Nginx, no cPanel)' || echo 'cPanel/WHM')"
     wp_confirm "Proceed?" || { wp_info "Aborted."; exit 0; }
 
     wp_stage_release
@@ -770,15 +991,28 @@ wp_install() {
         wp_install_cpanel_plugin
         wp_install_whm_plugin
         wp_register_hooks
-        if [ "${WP_NO_CRON:-0}" = 1 ]; then
-            wp_head "Cron"
-            wp_info "Skipped (--no-cron)"
-        else
-            wp_install_cron
-        fi
+    fi
+    if [ "${WP_NO_CRON:-0}" = 1 ]; then
+        wp_head "Cron"
+        wp_info "Skipped (--no-cron)"
+    else
+        wp_install_cron
+    fi
+    # standalone implies the Cockpit module when Cockpit is installed
+    if [ "${WP_COCKPIT:-0}" = 1 ] || [ "${WP_STANDALONE:-0}" = 1 ]; then
+        wp_install_cockpit
+    fi
+    if [ "${WP_SERVE:-0}" = 1 ]; then
+        wp_install_serve
+    else
+        wp_refresh_serve
     fi
     [ "${WP_GEOIP:-0}" = 1 ] && wp_setup_geoip
     wp_prune_releases
+    local p
+    for p in ${WP_CLEANUP_PATHS[@]+"${WP_CLEANUP_PATHS[@]}"}; do
+        wp_safe_rm_rf "$p"
+    done
     wp_first_collect
     wp_summary_install
 }
@@ -868,6 +1102,24 @@ wp_uninstall() {
         wp_ok "Removed $CRON_FILE"
     else
         wp_info "No cron file"
+    fi
+
+    if [ -d "$COCKPIT_DIR" ]; then
+        wp_head "Cockpit module"
+        wp_safe_rm_rf "$COCKPIT_DIR"
+        wp_ok "Removed $COCKPIT_DIR"
+    fi
+
+    if [ -f "$SERVE_UNIT" ]; then
+        wp_head "Dashboard service"
+        if command -v "$SYSTEMCTL" >/dev/null 2>&1; then
+            wp_try "disable webpulse-serve" "$SYSTEMCTL" disable --now webpulse-serve.service || true
+        fi
+        rm -f "$SERVE_UNIT"
+        if command -v "$SYSTEMCTL" >/dev/null 2>&1; then
+            wp_try "systemctl daemon-reload" "$SYSTEMCTL" daemon-reload || true
+        fi
+        wp_ok "Removed $SERVE_UNIT"
     fi
 
     wp_head "Code"

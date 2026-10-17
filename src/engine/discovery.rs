@@ -8,6 +8,11 @@
 //!   parked / sub domains. Without it kinds are inferred: `DNS=` is main, a domain
 //!   ending in `.<another domain of the user>` is sub, other `DNS<n>=` are addon,
 //!   anything else unknown.
+//!
+//! Which accounts, domains and logs exist is asked through a [`Provider`]:
+//! [`CpanelProvider`] (the readers above) on cPanel servers, [`StandaloneProvider`]
+//! (`engine::standalone`: config `sites`, Apache, nginx) elsewhere; `mode` in
+//! config.json chooses ([`resolve_mode`]).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
@@ -357,6 +362,10 @@ pub struct Archive {
     pub size: i64,
     /// Modification time at discovery.
     pub mtime: i64,
+    /// Standalone: the live log this file was rotated from (archives of one
+    /// stream are imported in time order, never twice even when logrotate
+    /// renames them, see `Collector::backfill_domain`); `None` for cPanel.
+    pub stream: Option<PathBuf>,
 }
 
 /// File-name patterns that are never access logs (fnmatch syntax, `*` only).
@@ -524,6 +533,7 @@ impl LogFiles {
                         https: rest.starts_with("ssl_log"),
                         size: st.size() as i64,
                         mtime: st.mtime(),
+                        stream: None,
                     });
                     break;
                 }
@@ -536,6 +546,279 @@ impl LogFiles {
             });
         }
         out
+    }
+}
+
+/// Where accounts and logs come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// cPanel & WHM: `/var/cpanel/users`, `/etc/userdomains`, domlogs.
+    Cpanel,
+    /// Any other server: config `sites`, Apache and nginx configurations.
+    Standalone,
+}
+
+impl Mode {
+    /// `cpanel` or `standalone`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mode::Cpanel => "cpanel",
+            Mode::Standalone => "standalone",
+        }
+    }
+}
+
+/// The effective mode: `mode` from config.json when it is `cpanel` or
+/// `standalone`; `auto` (the default) means cPanel when `paths.cpanel_marker`
+/// (`/usr/local/cpanel/cpanel`) exists or `paths.cpanel_users_dir` is a
+/// directory, standalone otherwise.
+pub fn resolve_mode(config: &crate::config::Config, paths: &Paths) -> Mode {
+    match config.get_str("mode").as_deref() {
+        Some("cpanel") => Mode::Cpanel,
+        Some("standalone") => Mode::Standalone,
+        _ => {
+            let marker = paths.cpanel_marker();
+            if (!marker.as_os_str().is_empty() && marker.exists())
+                || paths.cpanel_users_dir().is_dir()
+            {
+                Mode::Cpanel
+            } else {
+                Mode::Standalone
+            }
+        }
+    }
+}
+
+/// Accounts, domains and log files of the server.
+pub trait Provider: Send + Sync + std::fmt::Debug {
+    /// The mode this provider implements.
+    fn mode(&self) -> Mode;
+    /// Every account, sorted by name.
+    fn all(&self) -> BTreeMap<String, UserInfo>;
+    /// One account.
+    fn get(&self, user: &str) -> Option<UserInfo>;
+    /// True when the account exists.
+    fn exists(&self, user: &str) -> bool {
+        self.get(user).is_some()
+    }
+    /// Domains of an account with their kind.
+    fn domains_of(&self, user: &str) -> BTreeMap<String, String>;
+    /// Reseller owning the account (cPanel `OWNER=`).
+    fn owner(&self, user: &str) -> Option<String>;
+    /// Domains with logs but unknown to the account list (cPanel per-user domlogs).
+    fn extra_domains(&self, user: &str) -> Vec<String>;
+    /// Live logs of a domain (existing files only, each physical file once).
+    fn live_logs(&self, user: &str, domain: &str) -> Vec<LogFile>;
+    /// Archives for backfill, by domain (`dir`: `backfill --archive-dir`).
+    fn archives(
+        &self,
+        user: &str,
+        domains: &[String],
+        dir: Option<&Path>,
+    ) -> BTreeMap<String, Vec<Archive>>;
+    /// True when archives come from root-managed configuration (no per-account
+    /// ownership checks when opening them).
+    fn archives_trusted(&self) -> bool;
+    /// The standalone discovery result (`None` on cPanel).
+    fn standalone(&self) -> Option<&crate::engine::standalone::Discovery> {
+        None
+    }
+}
+
+/// The provider for the configuration: [`CpanelProvider`] or [`StandaloneProvider`].
+pub fn provider(config: &crate::config::Config, paths: &Paths) -> Box<dyn Provider> {
+    match resolve_mode(config, paths) {
+        Mode::Cpanel => Box::new(CpanelProvider::new(paths)),
+        Mode::Standalone => Box::new(StandaloneProvider::new(config, paths)),
+    }
+}
+
+/// cPanel discovery: [`CpanelUsers`] + [`LogFiles`] (behaviour of 0.5.0).
+#[derive(Debug)]
+pub struct CpanelProvider {
+    users: CpanelUsers,
+    logs: LogFiles,
+}
+
+impl CpanelProvider {
+    /// Discovery over the configured cPanel paths.
+    pub fn new(paths: &Paths) -> CpanelProvider {
+        CpanelProvider {
+            users: CpanelUsers::new(paths),
+            logs: LogFiles::new(paths),
+        }
+    }
+    /// The account reader.
+    pub fn users(&self) -> &CpanelUsers {
+        &self.users
+    }
+}
+
+impl Provider for CpanelProvider {
+    fn mode(&self) -> Mode {
+        Mode::Cpanel
+    }
+    fn all(&self) -> BTreeMap<String, UserInfo> {
+        self.users.all()
+    }
+    fn get(&self, user: &str) -> Option<UserInfo> {
+        self.users.get(user)
+    }
+    fn exists(&self, user: &str) -> bool {
+        self.users.exists(user)
+    }
+    fn domains_of(&self, user: &str) -> BTreeMap<String, String> {
+        self.users.domains_of(user)
+    }
+    fn owner(&self, user: &str) -> Option<String> {
+        self.users.owner(user)
+    }
+    fn extra_domains(&self, user: &str) -> Vec<String> {
+        self.logs.domains_in_user_dirs(user)
+    }
+    fn live_logs(&self, user: &str, domain: &str) -> Vec<LogFile> {
+        self.logs.for_domain(user, domain)
+    }
+    fn archives(
+        &self,
+        user: &str,
+        domains: &[String],
+        dir: Option<&Path>,
+    ) -> BTreeMap<String, Vec<Archive>> {
+        self.logs.archives(user, domains, dir)
+    }
+    fn archives_trusted(&self) -> bool {
+        false
+    }
+}
+
+/// Standalone discovery (see `engine::standalone`), computed once.
+#[derive(Debug)]
+pub struct StandaloneProvider {
+    paths: Paths,
+    disc: crate::engine::standalone::Discovery,
+}
+
+impl StandaloneProvider {
+    /// Runs discovery now.
+    pub fn new(config: &crate::config::Config, paths: &Paths) -> StandaloneProvider {
+        StandaloneProvider {
+            paths: paths.clone(),
+            disc: crate::engine::standalone::discover(config, paths),
+        }
+    }
+
+    fn info(&self, user: &str, domains: Vec<String>) -> UserInfo {
+        let kinds: BTreeMap<String, String> = domains
+            .iter()
+            .map(|d| (d.clone(), "site".to_string()))
+            .collect();
+        UserInfo {
+            owner: None,
+            domains: kinds.keys().cloned().collect(),
+            kinds,
+            main: None,
+            home: fs::passwd(user).map(|p| p.2).unwrap_or_default(),
+        }
+    }
+}
+
+impl Provider for StandaloneProvider {
+    fn mode(&self) -> Mode {
+        Mode::Standalone
+    }
+    fn all(&self) -> BTreeMap<String, UserInfo> {
+        self.disc
+            .owners()
+            .into_iter()
+            .filter(|(u, _)| is_valid_user(u))
+            .map(|(u, d)| {
+                let i = self.info(&u, d);
+                (u, i)
+            })
+            .collect()
+    }
+    fn get(&self, user: &str) -> Option<UserInfo> {
+        let d = self.disc.owners().remove(user)?;
+        Some(self.info(user, d))
+    }
+    fn domains_of(&self, user: &str) -> BTreeMap<String, String> {
+        self.get(user).map(|i| i.kinds).unwrap_or_default()
+    }
+    fn owner(&self, _user: &str) -> Option<String> {
+        None
+    }
+    fn extra_domains(&self, _user: &str) -> Vec<String> {
+        Vec::new()
+    }
+    fn live_logs(&self, user: &str, domain: &str) -> Vec<LogFile> {
+        let Some(site) = self.disc.site(user, domain) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut seen: HashSet<(u64, u64)> = HashSet::new();
+        for l in site.logs.iter().filter(|l| l.kind.usable()) {
+            let Ok(st) = std::fs::metadata(&l.path) else {
+                continue;
+            };
+            if !st.is_file() || !seen.insert((st.dev(), st.ino())) {
+                continue;
+            }
+            out.push(LogFile {
+                path: l.path.clone(),
+                https: l.https,
+                shared: false,
+            });
+        }
+        out
+    }
+    fn archives(
+        &self,
+        user: &str,
+        domains: &[String],
+        dir: Option<&Path>,
+    ) -> BTreeMap<String, Vec<Archive>> {
+        if dir.is_some() {
+            return LogFiles::new(&self.paths).archives(user, domains, dir);
+        }
+        let live: Vec<PathBuf> = self
+            .disc
+            .sites
+            .iter()
+            .chain(self.disc.ignored.iter())
+            .flat_map(|s| s.logs.iter().map(|l| l.path.clone()))
+            .collect();
+        let mut out: BTreeMap<String, Vec<Archive>> = BTreeMap::new();
+        for site in self.disc.sites_of(user) {
+            if !domains.contains(&site.domain) {
+                continue;
+            }
+            for (path, https, stream) in crate::engine::standalone::site_archives(site, &live) {
+                let Ok(st) = std::fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                out.entry(site.domain.clone()).or_default().push(Archive {
+                    path,
+                    https,
+                    size: st.size() as i64,
+                    mtime: st.mtime(),
+                    stream: Some(stream),
+                });
+            }
+        }
+        for list in out.values_mut() {
+            list.sort_by(|a, b| {
+                (a.mtime, a.path.as_os_str().as_encoded_bytes())
+                    .cmp(&(b.mtime, b.path.as_os_str().as_encoded_bytes()))
+            });
+        }
+        out
+    }
+    fn archives_trusted(&self) -> bool {
+        true
+    }
+    fn standalone(&self) -> Option<&crate::engine::standalone::Discovery> {
+        Some(&self.disc)
     }
 }
 

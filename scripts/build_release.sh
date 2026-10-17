@@ -15,6 +15,7 @@
 #   cpanel/                 plugin descriptor + LiveAPI shims (index.live.php, api.live.php, lib/)
 #   whm/                    AppConfig, CGIs (index.cgi Perl, api.cgi bash), page template, icon
 #   hooks/                  Standardized Hook scripts (Stats::RunAll, Stats::RunUser)
+#   cockpit/                Cockpit module (manifest.json; index.html is generated at install)
 #   etc/                    cron.d/webpulse, config.json.default
 #   install.sh uninstall.sh installer/lib.sh
 #   VERSION LICENSE README.md CHANGELOG.md
@@ -89,7 +90,7 @@ stage="$work/$name"
 mkdir -p "$stage/bin" "$stage/etc"
 
 install -m 0755 "$binary" "$stage/bin/webpulse"
-for item in cpanel whm hooks installer; do
+for item in cpanel whm hooks cockpit installer; do
     [ -d "$item" ] || { echo "build_release: $item/ is missing" >&2; exit 1; }
     cp -a "$item" "$stage/$item"
 done
@@ -115,7 +116,8 @@ fi
 listing=$(tar -tzf "$out")
 for required in bin/webpulse installer/lib.sh install.sh uninstall.sh VERSION etc/config.json.default etc/cron.d/webpulse \
     cpanel/plugin/install.json cpanel/webpulse/index.live.php cpanel/webpulse/api.live.php whm/cgi/index.cgi whm/cgi/api.cgi \
-    whm/webpulse.conf whm/templates/webpulse/index.tmpl hooks/stats_runall_pre.sh hooks/stats_runuser_pre.sh; do
+    whm/webpulse.conf whm/templates/webpulse/index.tmpl hooks/stats_runall_pre.sh hooks/stats_runuser_pre.sh \
+    cockpit/manifest.json; do
     if ! grep -qxF "$name/$required" <<<"$listing"; then
         echo "build_release: $name/$required is missing from the archive" >&2
         rm -f "$out"
