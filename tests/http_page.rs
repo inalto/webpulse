@@ -2,6 +2,7 @@
 //! fragment, CSP nonce, escaped bootstrap, admin.js only for admin scope,
 //! Response CGI mode, UI asset checks.
 
+mod common;
 mod http_common;
 
 use http_common::*;
@@ -108,6 +109,21 @@ fn admin_pages_include_admin_js() {
         "/var/webpulse/log/upgrade.log",
     ] {
         assert!(html.contains(marker), "update marker {marker}");
+    }
+    // GeoIP card (status, download job, settings) and the hero link to it
+    for marker in [
+        "function geoPanel(c, ctx)",
+        "ctx.api({ a: 'admin.geoip' })",
+        "ctx.api({ a: 'admin.run' }, { type: 'geoip-update' })",
+        "'geoip.url': url[0].value.trim(), 'geoip.city_db': city[0].value.trim()",
+        "geo.el.id = 'wp-geo'",
+        "heroCells(kp, o, ctx, toGeo)",
+        "'wp-kpi-link'",
+        "'geo.offhint': 'GeoIP is disabled; enable it so new visits get a country.'",
+        "'geo.n.old'",
+        "a.href = d.provider.url",
+    ] {
+        assert!(html.contains(marker), "GeoIP marker {marker}");
     }
     let user = page(
         &env,
@@ -323,7 +339,8 @@ fn ui_assets_size_no_inner_html_no_external_urls() {
             assert!(src.contains("'use strict';"), "{f} strict mode");
         }
     }
-    assert!(total < 200 * 1024, "inline payload under 200 KB");
+    // 240 KB since 0.5.0 (the GeoIP card); docs/DASHBOARD.md
+    assert!(total < 240 * 1024, "inline payload under 240 KB");
 }
 
 #[test]
@@ -344,4 +361,71 @@ fn embedded_header_keeps_a_stacking_context_above_the_content() {
         "embedded header keeps its z-index: {decls}"
     );
     assert!(!decls.contains("static"), "{decls}");
+}
+
+#[test]
+fn dashboard_footer_credits_db_ip_while_its_database_is_used() {
+    use common::{MmdbWriter, map, s};
+    let env = shared(SEED);
+    let html = page(
+        &env,
+        &Principal::user("alice"),
+        PageOptions::new("api.live.php", false, None),
+    );
+    assert!(
+        html.contains("var gc = S.boot.geoip_credit;"),
+        "footer code"
+    );
+    assert!(
+        !html.contains("\"geoip_credit\""),
+        "no credit without a database"
+    );
+
+    let env = fresh(SEED, "http-page-geoip");
+    let mut w = MmdbWriter::new(6, 24, &[], 0);
+    w.insert(
+        "203.0.113.0/24",
+        &map(&[("country", map(&[("iso_code", s("IT"))]))]),
+    );
+    let db = env.root.join("var/webpulse/geoip/dbip-country-lite.mmdb");
+    std::fs::write(&db, w.build(&[("database_type", s("DBIP-Country-Lite"))])).unwrap();
+    let html = page(
+        &env,
+        &Principal::user("alice"),
+        PageOptions::new("api.live.php", false, None),
+    );
+    assert!(
+        !html.contains("\"geoip_credit\""),
+        "GeoIP off (registry readable): no credit"
+    );
+    let mut cfg: Value =
+        serde_json::from_str(&std::fs::read_to_string(&env.config).unwrap()).unwrap();
+    cfg["geoip"]["enabled"] = json!(true);
+    std::fs::write(&env.config, cfg.to_string()).unwrap();
+    for p in [Principal::user("alice"), Principal::admin()] {
+        let html = page(&env, &p, PageOptions::new("api.cgi", true, None));
+        assert!(
+            html.contains(
+                r#""geoip_credit":{"text":"IP Geolocation by DB-IP","url":"https:\/\/db-ip.com"}"#
+            ) || html.contains(
+                r#""geoip_credit":{"text":"IP Geolocation by DB-IP","url":"https://db-ip.com"}"#
+            ),
+            "credit in the bootstrap"
+        );
+    }
+    let mut w = MmdbWriter::new(6, 24, &[], 0);
+    w.insert(
+        "203.0.113.0/24",
+        &map(&[("country", map(&[("iso_code", s("IT"))]))]),
+    );
+    std::fs::write(&db, w.build(&[("database_type", s("GeoLite2-Country"))])).unwrap();
+    let html = page(
+        &env,
+        &Principal::user("alice"),
+        PageOptions::new("api.live.php", false, None),
+    );
+    assert!(
+        !html.contains("geoip_credit\""),
+        "not a DB-IP database: no credit"
+    );
 }

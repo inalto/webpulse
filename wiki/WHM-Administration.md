@@ -28,7 +28,7 @@ A row of tiles at the top:
 | **Bot share, 30 days** | Share of requests from bots, with the number of bot hits. Marked *(partial)* on very large servers (more than 300 domains). |
 | **Data size** | Disk space of all domain databases, the number of databases and how many accounts collect. |
 | **Collector** | When the last collection ran, and how old the newest log line is (the lag). |
-| **Integration** | Tick or cross for **Cron job**, **Stats hook** and **GeoIP** (with the database date). |
+| **Integration** | Tick or cross for **Cron job**, **Stats hook** and **GeoIP** (with the database date). Click **GeoIP** to jump to the GeoIP card. |
 
 Below it, **Top domains** lists the busiest domains of the last 30 days with visits, pageviews,
 bandwidth, bot hits, visits today and the last collection. Click a domain to open its dashboard.
@@ -90,6 +90,47 @@ in the history):
 The job table shows the number, type, scope, when it started, how long it took, how many log lines it
 processed and its status (`running`, `ok`, `error`, `skipped`). It refreshes by itself while a job is
 running. The history keeps the last 500 jobs.
+
+### GeoIP
+
+The **GeoIP** card (below Jobs and Settings) shows whether visitors are geolocated and lets the
+administrator manage the database. Resellers see the status only.
+
+GeoIP adds the country of each visit: the **Countries** card and the country column of the visits
+log. The lookup uses a database file on the server; IP addresses are never sent anywhere.
+
+**Status** (left):
+
+- **Share of visits with a known country** in the last 30 days, over the 25 busiest domains you can
+  see. A low figure with GeoIP on usually means the database is missing or very old.
+- **Geolocation**: on or off (`geoip.enabled`).
+- **Country database**: type and build date read from the file (for example *DBIP-Country-Lite,
+  built 1 Oct 2026*), size, IP version, number of nodes, languages, path and when the file was
+  written; *Missing* when the file does not exist.
+- **City database**: optional (`geoip.city_db`).
+- **Monthly refresh**: whether `/etc/cron.d/webpulse` contains the `geoip-update` line the installer
+  adds (`30 4 1 * *`, 04:30 on the 1st of each month).
+- **Last download**: result and message of the last `geoip-update` run (from WHM or cron).
+
+**Actions** (administrator):
+
+| Control | Does |
+|---------|------|
+| **Geolocate visitors** | Saves `geoip.enabled` at once (same as the Settings checkbox). |
+| **Download database now** / **Update database now** | Starts `webpulse geoip-update --force` as a job: downloads the file for the current month (the previous month if not published yet), checks it is a valid MaxMind DB and replaces the old file. A progress bar shows while it runs; the card refreshes with the new build date. The download also works while GeoIP is off — the card then reminds you to enable it so new visits get a country. |
+| **Download URL** | `geoip.url`. An `https://` address ending in `.mmdb` or `.mmdb.gz`; `{YYYY}` and `{MM}` become the year and month (a preview shows the next download). Empty: the free DB-IP database. |
+| **City database (optional)** | `geoip.city_db`. An `.mmdb` file you placed in `/var/webpulse/geoip`. Empty: none. |
+
+Things to know:
+
+- The free database is DB-IP's [IP to Country Lite](https://db-ip.com/db/download/ip-to-country-lite),
+  licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). While it is in use, every
+  dashboard footer shows **IP Geolocation by DB-IP** as the licence requires.
+- Only new visits are geolocated. Visits collected before GeoIP was enabled (or before the database
+  was installed) keep the country `(unknown)`; they are not looked up again.
+- The monthly cron job refreshes the file when GeoIP is enabled (`webpulse geoip-update` without
+  `--force` does nothing while GeoIP is off).
+- Command line: `webpulse geoip-update [--force]`, `webpulse config set geoip.url …` ([[Command Line]]).
 
 ### Server report (PDF)
 

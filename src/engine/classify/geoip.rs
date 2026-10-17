@@ -196,6 +196,38 @@ pub fn open_reader(file: &Path) -> anyhow::Result<Reader<Vec<u8>>> {
     Reader::open_readfile(file).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))
 }
 
+/// A database larger than this is not inspected by [`read_metadata`] (bytes).
+const META_MAX_FILE: u64 = 4 << 30;
+/// The metadata section lies within this many bytes of the end of the file.
+const META_TAIL: u64 = 128 * 1024 + 14;
+
+/// Metadata of a MaxMind DB without reading the whole file: the reader is given a
+/// zeroed buffer of the file's size (pages never written cost no memory) holding only
+/// the tail of the file, where the metadata section is. Lookups on that reader would
+/// be meaningless; only its metadata is kept.
+pub fn read_metadata(file: &Path) -> anyhow::Result<maxminddb::Metadata> {
+    use std::io::{Read, Seek, SeekFrom};
+    let err = |e: &dyn std::fmt::Display| anyhow::anyhow!("{}: {e}", file.display());
+    let mut f = std::fs::File::open(file).map_err(|e| err(&e))?;
+    let len = f.metadata().map_err(|e| err(&e))?.len();
+    if len > META_MAX_FILE {
+        return Err(err(&"file too large"));
+    }
+    let tail = len.min(META_TAIL);
+    let mut buf = vec![0u8; len as usize];
+    f.seek(SeekFrom::Start(len - tail)).map_err(|e| err(&e))?;
+    f.read_exact(&mut buf[(len - tail) as usize..])
+        .map_err(|e| err(&e))?;
+    let r = Reader::from_source(buf).map_err(|e| err(&e))?;
+    Ok(r.metadata().clone())
+}
+
+/// True for the DB-IP databases (`database_type` such as `DBIP-Country-Lite`), whose
+/// CC BY 4.0 licence asks for the "IP Geolocation by DB-IP" attribution.
+pub fn is_dbip(m: &maxminddb::Metadata) -> bool {
+    m.database_type.to_ascii_uppercase().contains("DBIP")
+}
+
 fn addr(ip: &str) -> Option<IpAddr> {
     let a = crate::util::ip::parse_ip(ip)?;
     Some(match a {

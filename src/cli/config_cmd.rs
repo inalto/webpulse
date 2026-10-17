@@ -78,7 +78,7 @@ pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
                 return Err(super::usage("KEY and VALUE are required"));
             };
             let value: Value = serde_json::from_str(rawv).unwrap_or_else(|_| Value::from(rawv));
-            let value = match Config::validate(key, &value) {
+            let value = match app.config.validate_here(key, &value) {
                 Ok(v) => v,
                 Err(e) => {
                     ctx.err(&e.to_string());

@@ -143,7 +143,11 @@ so the Settings tab is testable); admin and reseller get 403, an empty body 400.
   `/etc/userdomains`, or an existing database), else 404.
 * `a=admin.settings` (GET, root only) / `a=admin.save_settings` (POST, root only) –
   `default_enabled, raw_retention_days, max_rows_per_dim, session_timeout_min,
-  store_ip, exclude_ips[], exclude_paths[], geoip.enabled, timezone`.
+  store_ip, exclude_ips[], exclude_paths[], geoip.enabled, timezone`. `admin.save_settings` also
+  accepts `geoip.url` (an `https://` URL ending in `.mmdb` or `.mmdb.gz`, `{YYYY}`/`{MM}` allowed;
+  empty or null = the built-in DB-IP URL) and `geoip.city_db` (an existing regular `.mmdb` file in
+  the directory of `geoip.country_db`; empty or null = none); `admin.settings` does not list them
+  (its shape is the one of 0.1.0) — `admin.geoip` reports them. Invalid values: 400.
 * `a=admin.run` (POST `{type: "collect"|"backfill"|"rollup", user?, domain?}`)
   – spawns `bin/webpulse <type> … --job` detached (`nohup … &`), returns
   `{job_id}` only; the UI polls `admin.jobs`. `domain` must be a domain of
@@ -161,6 +165,26 @@ so the Settings tab is testable); admin and reseller get 403, an empty body 400.
   is running (started less than an hour ago) or when the binary does not run from an installation
   (`<root>/bin/webpulse` with a root-owned, not group/other-writable `<root>/install.sh`); 403 for
   resellers.
+* `a=admin.run` (POST `{type: "geoip-update"}`, root only) – spawns `bin/webpulse geoip-update
+  --force --job <id>` detached: downloads `geoip.url` for the current month (else the previous one),
+  validates it and replaces `geoip.country_db`. Works with `geoip.enabled` false (download only).
+  The job row has type `geoip-update` and scope `all`; it finishes `ok` ("installed
+  DBIP-Country-Lite built 2026-10-01 (N bytes)") or `error` (the download / validation message).
+  Returns `{job_id, enabled}`; 409 `conflict` while one is running; 403 for resellers.
+* `a=admin.geoip` (GET; admin and reseller) – status for the WHM GeoIP card:
+  `{enabled, dir (directory of country_db), country: DB, city: DB|null (null when geoip.city_db is
+  unset), url (template in effect), url_preview ({YYYY}/{MM} = current UTC month), url_default,
+  url_overridden, cron: {file, present, scheduled (a non-comment line runs geoip-update), line},
+  last_job (newest job of type geoip-update, with started_at_iso / finished_at_iso, or null),
+  known_country_30d: {share (0–1 or null), visits, known, domains, partial}, attribution
+  ("IP Geolocation by DB-IP" when enabled and a DB-IP database is installed, else null),
+  provider: {name, url, license, attribution, attribution_url}, can_edit (root)}` where DB =
+  `{path, present, bytes, mtime (ISO), metadata: {database_type, build_epoch, build_date, ip_version,
+  node_count, record_size, languages, description, dbip} | null, error}` (the metadata is read from
+  the end of the file with the maxminddb crate, without loading the database).
+  `known_country_30d` sums the `country` dimension (`dim_daily`, last 30 days) of the 25 busiest
+  domains in scope (`partial` when there are more, or one could not be read): the share of visits
+  whose country is not `(unknown)`.
 * `a=admin.jobs` – last 50 rows of `jobs`.
 * `a=admin.update` (GET; admin and reseller) – the last release check, re-evaluated against the
   running version: `{current, latest, tag, is_newer, html_url, published_at, notes (plain text,
@@ -206,6 +230,9 @@ at `hour` granularity; `report` rows carry `label` (pretty name) and, for
 `{labels, granularity, metric, keys, key_labels, values}`; `visits_log` adds
 `next_before_id` (cursor tie-breaker), `live` (open visits included) and
 `retention_days`; `realtime` adds `last_event_at` and `last_collect_at`;
-`health` adds `peak_hour` and `errors_series.hits/bot_hits`. Admin
+`health` adds `peak_hour` and `errors_series.hits/bot_hits`. The page bootstrap
+(`window.WEBPULSE`) carries `geoip_credit: {text, url}` while a DB-IP database is installed and
+GeoIP is on (always checked when the registry is not readable, as in cPanel): the dashboard footer
+shows the attribution its CC BY 4.0 licence requires. Admin
 `bot_share_30d` is computed from each domain's `daily` table (flag `partial`
 above 300 domains).

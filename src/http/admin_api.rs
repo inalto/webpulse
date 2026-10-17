@@ -32,6 +32,9 @@ pub const SETTINGS: [&str; 9] = [
     "geoip.enabled",
     "timezone",
 ];
+/// Settings the WHM GeoIP card saves through `admin.save_settings` (not listed by
+/// `admin.settings`, whose shape is the one of 0.1.0; `admin.geoip` reports them).
+pub const GEOIP_SETTINGS: [&str; 2] = ["geoip.url", "geoip.city_db"];
 /// Job types WHM may start.
 pub const JOB_TYPES: [&str; 3] = ["collect", "backfill", "rollup"];
 /// Jobs started from WHM that may run at the same time.
@@ -55,6 +58,7 @@ pub fn handle(ctx: &Ctx, r: &Request, p: &Principal, action: &str) -> R {
         "purge" => purge(ctx, r, p),
         "update" => update_info(ctx, p),
         "update_check" => update_check(ctx, p),
+        "geoip" => super::admin_geoip::status(ctx, p),
         other => Err(ApiError::bad_request(&format!(
             "Unknown action \"admin.{}\"",
             php::substr(other, 40)
@@ -664,6 +668,15 @@ fn save_settings(ctx: &Ctx, r: &Request, p: &Principal) -> R {
     input.retain(|(k, _)| k != "geoip");
     let mut clean = Vec::new();
     for (k, v) in &input {
+        if GEOIP_SETTINGS.contains(&k.as_str()) {
+            let v = ctx
+                .app
+                .config
+                .validate_here(k, v)
+                .map_err(|e| invalid(e.to_string()))?;
+            clean.push((k.clone(), v));
+            continue;
+        }
         if !SETTINGS.contains(&k.as_str()) {
             return Err(ApiError::bad_request(&format!(
                 "Setting \"{}\" cannot be changed here",
@@ -675,7 +688,11 @@ fn save_settings(ctx: &Ctx, r: &Request, p: &Principal) -> R {
     }
     let reg = ctx.registry()?;
     for (k, v) in &clean {
-        reg.set_setting(k, &validate_setting(k, v)?)?;
+        if GEOIP_SETTINGS.contains(&k.as_str()) {
+            reg.set_setting(k, v)?;
+        } else {
+            reg.set_setting(k, &validate_setting(k, v)?)?;
+        }
     }
     ctx.reload_overrides();
     settings(ctx, p)
@@ -685,6 +702,9 @@ fn run(ctx: &Ctx, r: &Request, p: &Principal) -> R {
     let b = r.json()?;
     if matches!(field_nn(&b, "type"), Some(Value::String(t)) if t == "upgrade") {
         return upgrade(ctx, p);
+    }
+    if matches!(field_nn(&b, "type"), Some(Value::String(t)) if t == super::admin_geoip::JOB) {
+        return super::admin_geoip::run_update(ctx, p);
     }
     let kind = match field_nn(&b, "type") {
         Some(Value::String(t)) if JOB_TYPES.contains(&t.as_str()) => t.clone(),

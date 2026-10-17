@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
-use super::{Ctx, Kind, RawArgs};
+use super::{Ctx, Job, Kind, RawArgs};
 use crate::error::exit;
 use crate::log::Level;
 use crate::util::{fs, time};
@@ -25,24 +25,35 @@ pub const MAX_DOWNLOAD: u64 = 64 * 1024 * 1024;
 /// Largest decompressed database accepted (bytes).
 pub const MAX_DATABASE: u64 = 512 * 1024 * 1024;
 
+/// Job type in `registry.jobs` (and of `admin.run`).
+pub const JOB_TYPE: &str = "geoip-update";
+
 /// One-line description.
 pub const SUMMARY: &str = "download the free DB-IP country database (when geoip.enabled)";
 
 /// `--help` text.
-pub const USAGE: &str = "Usage: webpulse geoip-update [--force] [--url URL] [--out FILE]
+pub const USAGE: &str =
+    "Usage: webpulse geoip-update [--force] [--url URL] [--out FILE] [--job [ID]]
 
 Downloads dbip-country-lite-YYYY-MM.mmdb.gz for the current month (falls
 back to the previous month), validates it and atomically replaces
-geoip.country_db. Does nothing unless geoip.enabled, or --force.
+geoip.country_db. Does nothing unless geoip.enabled, or --force (the monthly
+cron job runs it without --force; WHM's \"Download database now\" uses --force,
+so the file can be installed before GeoIP is switched on). The run is
+recorded in registry.jobs when the registry exists.
 
-  --url URL   source (may contain {YYYY} and {MM}; file:// and local paths work)
-  --out FILE  destination instead of geoip.country_db";
+  --force     download even when geoip.enabled is false
+  --url URL   source (may contain {YYYY} and {MM}; file:// and local paths work);
+              default geoip.url
+  --out FILE  destination instead of geoip.country_db
+  --job [ID]  record the run in registry.jobs (adopt job ID when given)";
 
 /// Options.
 pub const SPEC: &[(&str, Kind)] = &[
     ("force", Kind::Flag),
     ("url", Kind::Value),
     ("out", Kind::Value),
+    ("job", Kind::Optional),
 ];
 
 /// Arguments (clap description).
@@ -57,6 +68,9 @@ pub struct Args {
     /// Destination file
     #[arg(long)]
     pub out: Option<PathBuf>,
+    /// Record the run in registry.jobs (adopt job ID when given)
+    #[arg(long)]
+    pub job: Option<Option<String>>,
 }
 
 fn has_scheme(url: &str) -> bool {
@@ -248,9 +262,52 @@ fn gunzip_to(src: &Path, dest: &Path) -> Result<()> {
 pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
     let app = ctx.app()?;
     if !raw.flag("force") && !crate::config::php_bool(app.config.get("geoip.enabled")) {
+        if raw.has("job") {
+            Job::new(ctx, JOB_TYPE, Some("all"), raw)?.finish(
+                "skipped",
+                0,
+                0,
+                0,
+                Some("GeoIP is disabled"),
+                false,
+            );
+        }
         ctx.info("GeoIP is disabled (geoip.enabled = false); use --force to download anyway");
         return Ok(exit::OK);
     }
+    // the run is recorded in registry.jobs when the registry exists (WHM shows the last one)
+    let record = app.paths.registry_db().is_file();
+    let mut job = Job::new(ctx, JOB_TYPE, Some("all"), raw)?;
+    match install(ctx, raw) {
+        Ok(info) => {
+            let msg = format!(
+                "installed {} built {} ({} bytes)",
+                info["database_type"].as_str().unwrap_or(""),
+                info["build_date"].as_str().unwrap_or(""),
+                info["bytes"]
+            );
+            job.finish("ok", 0, 0, 0, Some(&msg), record);
+            ctx.result(&info, || {
+                format!(
+                    "installed {} ({}, built {})",
+                    info["file"].as_str().unwrap_or(""),
+                    info["database_type"].as_str().unwrap_or(""),
+                    info["build_date"].as_str().unwrap_or("")
+                )
+            });
+            Ok(exit::OK)
+        }
+        Err(msg) => {
+            job.finish("error", 0, 0, 0, Some(&msg), record);
+            ctx.err(&msg);
+            Ok(exit::ERROR)
+        }
+    }
+}
+
+/// Downloads, validates and installs the database; the error is the message printed.
+fn install(ctx: &Ctx, raw: &RawArgs) -> std::result::Result<Value, String> {
+    let app = ctx.app().map_err(|e| e.to_string())?;
     let target = raw.opt("out").map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(app.config.get_str("geoip.country_db").unwrap_or_default())
     });
@@ -274,8 +331,7 @@ pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     if let Err(e) = fs::ensure_dir(&dir, 0o755, None, None) {
-        ctx.err(&format!("GeoIP update failed: {e}"));
-        return Ok(exit::ERROR);
+        return Err(format!("GeoIP update failed: {e}"));
     }
     let base = dir.join(format!(
         ".{}.{}",
@@ -313,8 +369,7 @@ pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
     }
     let Some(used) = used else {
         cleanup();
-        ctx.err(&format!("GeoIP download failed: {}", errors.join("; ")));
-        return Ok(exit::ERROR);
+        return Err(format!("GeoIP download failed: {}", errors.join("; ")));
     };
     let mut head = [0u8; 2];
     let is_gz = File::open(&download)
@@ -324,21 +379,18 @@ pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
     if is_gz {
         if let Err(e) = gunzip_to(&download, &tmp) {
             cleanup();
-            ctx.err(&format!("GeoIP update failed: {e}"));
-            return Ok(exit::ERROR);
+            return Err(format!("GeoIP update failed: {e}"));
         }
         let _ = std::fs::remove_file(&download);
     } else if std::fs::rename(&download, &tmp).is_err() {
         cleanup();
-        ctx.err(&format!("cannot write {}", tmp.display()));
-        return Ok(exit::ERROR);
+        return Err(format!("cannot write {}", tmp.display()));
     }
     let meta = match crate::engine::classify::geoip::open_reader(&tmp) {
         Ok(r) => r.metadata().clone(),
         Err(e) => {
             cleanup();
-            ctx.err(&format!("downloaded file is not a valid MaxMind DB: {e}"));
-            return Ok(exit::ERROR);
+            return Err(format!("downloaded file is not a valid MaxMind DB: {e}"));
         }
     };
     {
@@ -348,8 +400,7 @@ pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
     let bytes = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
     if std::fs::rename(&tmp, &target).is_err() {
         cleanup();
-        ctx.err(&format!("cannot move the database to {}", target.display()));
-        return Ok(exit::ERROR);
+        return Err(format!("cannot move the database to {}", target.display()));
     }
     cleanup();
     let info = json!({
@@ -362,15 +413,7 @@ pub fn main(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
     });
     app.log
         .log_ctx(Level::Info, "geoip database updated", &info);
-    ctx.result(&info, || {
-        format!(
-            "installed {} ({}, built {})",
-            target.display(),
-            meta.database_type,
-            time::gm_format(meta.build_epoch as i64, "%Y-%m-%d")
-        )
-    });
-    Ok(exit::OK)
+    Ok(info)
 }
 
 #[cfg(test)]

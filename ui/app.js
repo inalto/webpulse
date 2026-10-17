@@ -477,6 +477,11 @@
     els.foot = h('footer', 'wp-foot', null, shell);
     h('span', null, 'WebPulse ' + (S.boot.version || ''), els.foot);
     h('span', null, 'Log-based, cookie-free analytics', els.foot);
+    var gc = S.boot.geoip_credit;
+    if (gc) {
+      var ga = h('a', 'wp-foot-credit', gc.text, els.foot);
+      ga.href = gc.url; ga.target = '_blank'; ga.rel = 'noopener noreferrer';
+    }
 
     if (S.listening) return;
     S.listening = true;

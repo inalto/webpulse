@@ -6,6 +6,7 @@
 //! shared and the parity harness (`tests/parity/api.sh`) diffs both.
 
 pub mod admin_api;
+pub mod admin_geoip;
 pub mod api;
 pub mod cpanel;
 pub mod ctx;

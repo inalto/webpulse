@@ -4,8 +4,8 @@
 
   var A = {};
 
-  /** The server KPI grid (admin.overview). */
-  function heroCells(kp, o, ctx) {
+  /** The server KPI grid (admin.overview); `onGeo` makes the GeoIP line a link to the card. */
+  function heroCells(kp, o, ctx, onGeo) {
     var h = ctx.h, fmt = ctx.fmt;
     var cell = function (label, value, sub) {
       var d = h('div', null, null, kp);
@@ -24,14 +24,15 @@
     cell('Collector', o.collector.last_collect_at ? ctx.ago(o.collector.last_collect_at) : 'never',
       lag == null ? 'no log lines yet' : 'newest log line ' + (lag < 120 ? lag + ' s' : Math.round(lag / 60) + ' min') + ' old');
     var st = cell('Integration', null, null);
-    var line = function (label, good) {
+    var line = function (label, good, go) {
       var p = h('div', 'wp-kpi-sub', null, st);
       h('span', good ? 'wp-ok-icon' : 'wp-bad-icon', (good ? '✓' : '✗') + ' ', p);
-      h('span', null, label, p);
+      var l = h(go ? 'button' : 'span', go ? 'wp-kpi-link' : null, label, p);
+      if (go) { l.type = 'button'; l.title = ctx.t('geo.hero'); l.addEventListener('click', go); }
     };
     line('Cron job', o.collector.cron_installed);
     line('Stats hook', o.collector.hook_installed);
-    line('GeoIP' + (o.collector.geoip.db_date ? ' (' + o.collector.geoip.db_date + ')' : ''), o.collector.geoip.enabled && !!o.collector.geoip.db_date);
+    line('GeoIP' + (o.collector.geoip.db_date ? ' (' + o.collector.geoip.db_date + ')' : ''), o.collector.geoip.enabled && !!o.collector.geoip.db_date, onGeo);
   }
 
   /** Top domains table; `link` opens a domain in the dashboard. */
@@ -113,12 +114,21 @@
     var acc = ctx.card(grid, { title: 'Accounts', sub: 'Collection is on for every account unless switched off here. "Default" follows the server setting.', span: 'wide' });
     var jobs = ctx.card(grid, { title: 'Jobs', span: isRoot ? 'two-thirds' : 'wide' });
     var set = isRoot ? ctx.card(grid, { title: 'Settings', sub: 'Server-wide; stored in the WebPulse registry.', span: 'third' }) : null;
+    var geo = ctx.card(grid, { title: 'GeoIP', sub: t('geo.sub'), span: 'wide' });
+    geo.el.id = 'wp-geo';
+    geo.el.tabIndex = -1;
+    geoPanel(geo, ctx);
+    var toGeo = function () {
+      var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      geo.el.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' });
+      geo.el.focus({ preventScroll: true });
+    };
     var upd = ctx.card(grid, { title: t('upd.title'), sub: 'New releases are looked up nightly on GitHub by the server.', span: 'wide' });
     upd.el.classList.add('wp-upd-card');
     updPanel(h('div', 'wp-upd', null, upd.body), ctx);
 
     ctx.load({ el: hero, body: kp }, function () { return ctx.api({ a: 'admin.overview' }); }, function (o) {
-      heroCells(kp, o, ctx);
+      heroCells(kp, o, ctx, toGeo);
       ctx.clear(top.body);
       topDomains(top.body, o.top_domains, ctx, true);
     });
@@ -374,6 +384,158 @@
         });
       });
     }
+  }
+
+  /* ------------------------------------------------------------ GeoIP
+   * admin.geoip for the status; root saves geoip.* through admin.save_settings and
+   * starts admin.run {type: geoip-update}, then polls admin.jobs every 3 s. */
+  var G = { job: 0, t0: 0, phase: 'idle', msg: '', timer: 0 };
+  function geoPanel(c, ctx) {
+    var h = ctx.h, t = ctx.t, fmt = ctx.fmt;
+    var isRoot = ctx.principal.type === 'admin';
+    function reload() { ctx.load(c, function () { return ctx.api({ a: 'admin.geoip' }); }, draw); }
+    function poll() {
+      clearTimeout(G.timer);
+      G.timer = setTimeout(function () {
+        if (!c.el.isConnected) return;
+        ctx.api({ a: 'admin.jobs' }).then(function (d) {
+          var j = d.jobs.filter(function (x) { return x.id === G.job; })[0];
+          if (j && j.status === 'running' && Date.now() - G.t0 < 600000) { poll(); drawState(); return; }
+          G.phase = !j || j.status === 'running' ? 'failed' : j.status === 'ok' ? 'done' : 'failed';
+          G.msg = !j || j.status === 'running' ? t('geo.timeout') : j.message || j.status;
+          reload();
+        }, poll);
+      }, 3000);
+    }
+    var drawState = function () {};
+    function draw(d) {
+      var wrap = h('div', 'wp-geo', null, c.body);
+      var main = h('div', 'wp-geo-main', null, wrap);
+      var k = d.known_country_30d, cov = h('div', 'wp-geo-cov', null, main);
+      h('div', 'wp-geo-num', k.share == null ? '–' : fmt.pct(k.share), cov);
+      h('p', null, k.share == null ? t('geo.cov.none') : t('geo.cov', { n: fmt.num(k.visits) }) + (k.partial ? t('geo.cov.part', { d: k.domains }) : ''), cov);
+      var bar = h('div', 'wp-geo-bar', null, cov);
+      bar.setAttribute('aria-hidden', 'true');
+      h('span', null, null, bar).style.width = ((k.share || 0) * 100) + '%';
+
+      var dl = h('dl', 'wp-geo-facts', null, main);
+      var row = function (label, ok, value, sub) {
+        h('dt', null, label, dl);
+        var dd = h('dd', null, null, dl);
+        if (ok != null) h('span', ok ? 'wp-ok-icon' : 'wp-bad-icon', (ok ? '✓' : '✗') + ' ', dd);
+        h('span', null, value, dd);
+        (sub || []).forEach(function (x) { if (x) h('small', null, x, dd); });
+      };
+      var db = function (label, x, optional) {
+        if (!x) { row(label, null, t('geo.nocity')); return; }
+        var m = x.metadata;
+        row(label, !!m, m ? t('geo.built', { type: m.database_type, d: ctx.dateFmtY.format(ctx.parseDay(m.build_date)) })
+          : x.present ? t('geo.invalid') : t('geo.missing'), [
+          m && t('geo.meta', { size: fmt.bytes(x.bytes), v: m.ip_version, n: fmt.num(m.node_count), l: m.languages.join(', ') || '–' }),
+          x.present && x.mtime ? t('geo.file', { p: x.path, ago: ctx.ago(x.mtime) }) : x.path]);
+      };
+      row(t('geo.state'), d.enabled, d.enabled ? t('geo.on') : t('geo.off'));
+      db(t('geo.country'), d.country);
+      db(t('geo.city'), d.city);
+      row(t('geo.cron'), d.cron.scheduled, d.cron.scheduled ? t('geo.cron.on') : t('geo.cron.off', { f: d.cron.file }), [d.cron.line]);
+      var j = d.last_job;
+      row(t('geo.last'), j && j.status !== 'running' ? j.status === 'ok' : null, !j ? t('geo.job.none')
+        : t(j.status === 'running' ? 'geo.job.run' : j.status === 'ok' ? 'geo.job.ok' : 'geo.job.err', { ago: ctx.ago(j.finished_at_iso || j.started_at_iso) }), [j && j.message]);
+
+      var side = h('div', 'wp-geo-side', null, wrap);
+      if (!isRoot) h('p', 'wp-upd-sub', t('geo.reseller'), side);
+      else controls(side, d);
+
+      var notes = h('div', 'wp-geo-notes', null, wrap);
+      h('p', null, t('geo.n.adds'), notes);
+      var src = h('p', null, null, notes), parts = t('geo.n.src', { lic: d.provider.license }).split('{link}');
+      src.appendChild(document.createTextNode(parts[0]));
+      var a = h('a', null, t('geo.n.link'), src);
+      a.href = d.provider.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      src.appendChild(document.createTextNode(parts[1] || ''));
+      h('p', null, t('geo.n.old'), notes);
+      h('p', null, t('geo.n.cron'), notes);
+    }
+    function controls(side, d) {
+      var tl = h('label', 'wp-checkbox', null, side), chk = h('input', null, null, tl);
+      chk.type = 'checkbox';
+      chk.checked = d.enabled;
+      h('span', null, t('geo.toggle'), tl);
+      var tst = h('span', 'wp-status', null, side);
+      tst.setAttribute('role', 'status');
+      chk.addEventListener('change', function () {
+        chk.disabled = true;
+        ctx.api({ a: 'admin.save_settings' }, { settings: { 'geoip.enabled': chk.checked } }).then(reload, function (e) {
+          chk.disabled = false; chk.checked = !chk.checked; tst.className = 'wp-status is-err'; tst.textContent = e.message;
+        });
+      });
+      if (!d.enabled) h('p', 'wp-geo-hint', t('geo.offhint'), side);
+
+      var act = h('div', 'wp-upd-state', null, side);
+      var go = ctx.btn(d.country.present ? '' : 'is-primary', t(d.country.present ? 'geo.update' : 'geo.download'), function () {
+        go.disabled = true;
+        G.phase = 'starting'; G.msg = '';
+        ctx.api({ a: 'admin.run' }, { type: 'geoip-update' }).then(function (r) {
+          G.job = r.job_id; G.t0 = Date.now(); G.phase = 'running'; drawState(); poll();
+        }, function (e) { G.phase = 'failed'; G.msg = e.message; drawState(); });
+      }, null);
+      side.insertBefore(go, act);
+      go.classList.add('wp-geo-go');
+      var lj = d.last_job;
+      if (G.phase !== 'starting' && lj && lj.status === 'running') {
+        if (G.job !== lj.id) { G.job = lj.id; G.t0 = Date.now(); }
+        G.phase = 'running'; poll();
+      }
+      drawState = function () {
+        ctx.clear(act);
+        act.setAttribute('role', 'status');
+        go.disabled = G.phase === 'running' || G.phase === 'starting';
+        if (go.disabled) {
+          h('div', 'wp-upd-bar', null, act);
+          if (G.job) h('p', 'wp-upd-sub', t('geo.running', { id: G.job, s: Math.round((Date.now() - G.t0) / 1000) }), act);
+        } else if (G.phase === 'done') h('p', 'wp-status is-ok', t('geo.done') + ' ' + G.msg, act);
+        else if (G.phase === 'failed') h('p', 'wp-upd-err', t('geo.failed', { m: G.msg }), act);
+      };
+      drawState();
+
+      var form = h('form', 'wp-form', null, side);
+      form.noValidate = true;
+      var field = function (id, label, value, help) {
+        var f = h('div', 'wp-field', null, form);
+        var l = h('label', null, label, f);
+        var i = h('input', 'wp-input', null, f);
+        i.id = 'wp-geo-' + id; l.htmlFor = i.id;
+        i.value = value || ''; i.spellcheck = false; i.autocomplete = 'off';
+        var hp = h('div', 'wp-help', help, f);
+        return [i, hp];
+      };
+      var url = field('url', t('geo.url'), d.url_overridden || d.url !== d.url_default ? d.url : '', t('geo.url.help'));
+      url[0].placeholder = d.url_default;
+      url[0].type = 'url';
+      var next = h('div', 'wp-help', null, url[1].parentNode);
+      var preview = function () {
+        var u = url[0].value.trim() || d.url_default, now = new Date();
+        next.textContent = t('geo.url.next', { u: u.replace(/\{YYYY\}/g, now.getUTCFullYear()).replace(/\{MM\}/g, ('0' + (now.getUTCMonth() + 1)).slice(-2)) });
+      };
+      url[0].addEventListener('input', preview);
+      preview();
+      var city = field('city', t('geo.citydb'), d.city ? d.city.path : '', t('geo.citydb.help', { d: d.dir }));
+      city[0].placeholder = d.dir + '/dbip-city-lite.mmdb';
+      var srow = h('div', 'wp-form-row', null, form);
+      var save = h('button', 'wp-btn', t('geo.save'), srow);
+      save.type = 'submit';
+      var st = h('span', 'wp-status', null, srow);
+      st.setAttribute('role', 'status');
+      form.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        save.disabled = true;
+        st.className = 'wp-status'; st.textContent = '…';
+        ctx.api({ a: 'admin.save_settings' }, { settings: { 'geoip.url': url[0].value.trim(), 'geoip.city_db': city[0].value.trim() } }).then(function () {
+          G.phase = 'idle'; reload();
+        }, function (e) { st.className = 'wp-status is-err'; st.textContent = e.message; save.disabled = false; });
+      });
+    }
+    reload();
   }
 
   /** Printable server report: KPIs, every top domain, accounts (no switches), last 20 jobs. */

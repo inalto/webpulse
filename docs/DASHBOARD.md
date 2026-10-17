@@ -1,7 +1,7 @@
 # Dashboard — reports, graphs and the reasoning behind them
 
 The same single-page app (vanilla JS, inline SVG charts, inline CSS, ≈ 190 KB
-unminified (budget 200 KB, checked by `tests/http_page.rs`), no external requests, light/dark via `prefers-color-scheme` with a
+unminified (budget 240 KB since 0.5.0, was 200 KB until the GeoIP card; checked by `tests/http_page.rs`), no external requests, light/dark via `prefers-color-scheme` with a
 manual toggle) is served to cPanel users, WHM admins and the dev server. It is
 rendered by the binary (`http::page::render(&Ctx, &Principal, &PageOptions)`,
 `webpulse cgi --page`) as one HTML document with `<script>` and `<style>`
@@ -123,6 +123,25 @@ domains"). The server view contains:
   timeout, store IP, server-wide excluded IPs/paths, GeoIP toggle, timezone.
 * **Jobs**: Run collection now / Backfill from archives (pick account) /
   Run rollup, job history with status and line counts.
+* **GeoIP** (full width, below Jobs/Settings; admin and reseller, only root changes things):
+  data from `admin.geoip`. Left: the share of visits of the last 30 days with a known country
+  (large figure and a thin bar), then a list: geolocation on/off, country database (type and build
+  date, size, IP version, node count, languages, path and file date, or Missing / not a valid
+  MaxMind DB file), city database (optional), monthly refresh (the `geoip-update` line of the cron
+  file) and the last download job. Right (root): the **Geolocate visitors** checkbox (saves
+  `geoip.enabled` at once), **Download database now** / **Update database now** (`admin.run {type:
+  "geoip-update"}`, then `admin.jobs` every 3 s for up to 10 minutes with an indeterminate bar; the
+  card reloads when the job ends), a hint "GeoIP is disabled; enable it so new visits get a
+  country." while off, and a form for **Download URL** (`geoip.url`, with a live preview of the next
+  download for the current month) and **City database (optional)** (`geoip.city_db`); resellers read
+  "The server administrator manages the GeoIP database." Below: four short notes — what GeoIP adds
+  (Countries card, country column of the visits log), the source (DB-IP IP to Country Lite, link
+  from the API, CC BY 4.0, the dashboards' credit), that only new visits are geolocated, and the
+  monthly cron refresh. The **GeoIP** line of the hero's **Integration** tile is a button that
+  scrolls to (and focuses) this card.
+* **Footer credit**: while a DB-IP database is installed and GeoIP is on, every dashboard footer
+  shows "IP Geolocation by DB-IP" linking to db-ip.com (bootstrap `geoip_credit`; the URL comes from
+  the server, the scripts reference no external URL).
 * **Updates** (full width, last): the same panel as the bell popover below.
 
 ### Update bell (admin and reseller)

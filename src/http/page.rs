@@ -185,6 +185,13 @@ pub fn bootstrap(ctx: &Ctx, p: &Principal, o: &PageOptions) -> serde_json::Value
         "dims": dimension::meta(),
         "ranges": range::SHORTCUTS,
     });
+    // DB-IP's CC BY 4.0 licence: the attribution in the footer while its database is used.
+    if super::admin_geoip::attribution_needed(ctx) {
+        boot["geoip_credit"] = json!({
+            "text": super::admin_geoip::ATTRIBUTION,
+            "url": super::admin_geoip::ATTRIBUTION_URL,
+        });
+    }
     // The server name on the cover of the WHM reports (admin scope only).
     if p.has_admin_scope()
         && let Some(host) = hostname()

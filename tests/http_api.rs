@@ -2,6 +2,7 @@
 //! shapes from docs/API.md, totals, validation errors, CSV export, mutations,
 //! user settings, admin actions, no-data and schema states.
 
+mod common;
 mod http_common;
 
 use http_common::*;
@@ -1857,4 +1858,449 @@ fn admin_run_upgrade_runs_install_sh_and_finishes_the_job() {
 
 fn read_file(p: &std::path::Path) -> String {
     std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+}
+
+// ------------------------------------------------------------------- GeoIP
+
+/// A tiny valid MaxMind DB (203.0.113.0/24 = IT) of the given `database_type`.
+fn tiny_mmdb(db_type: &str) -> Vec<u8> {
+    use common::{MmdbWriter, map, s};
+    let mut w = MmdbWriter::new(6, 24, &[], 0);
+    w.insert(
+        "203.0.113.0/24",
+        &map(&[("country", map(&[("iso_code", s("IT"))]))]),
+    );
+    w.build(&[("database_type", s(db_type))])
+}
+
+fn gzip(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(data).unwrap();
+    e.finish().unwrap()
+}
+
+/// Serves `body` with `status` for every request; returns `http://127.0.0.1:<port>`.
+fn fake_download(status: u16, body: Vec<u8>) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match s.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let _ = write!(
+                s,
+                "HTTP/1.1 {status} X\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = s.write_all(&body);
+        }
+    });
+    base
+}
+
+fn patch_config(env: &Env, f: impl FnOnce(&mut Value)) {
+    let mut cfg: Value =
+        serde_json::from_str(&std::fs::read_to_string(&env.config).unwrap()).unwrap();
+    f(&mut cfg);
+    std::fs::write(&env.config, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+}
+
+/// `webpulse cgi --whm --api` as root with a JSON POST (the spawned job runs this build).
+fn whm_run(env: &Env, body: &str) -> Cgi {
+    let r = run(
+        &["cgi", "--whm", "--api"],
+        &[
+            ("WEBPULSE_CONFIG", env.config.display().to_string()),
+            ("WEBPULSE_CGI_TESTING", "1".into()),
+            ("REQUEST_METHOD", "POST".into()),
+            ("QUERY_STRING", "a=admin.run".into()),
+            ("CONTENT_LENGTH", body.len().to_string()),
+            ("HTTP_X_WEBPULSE_REQUEST", "1".into()),
+            ("REMOTE_USER", "root".into()),
+        ],
+        body.as_bytes(),
+    );
+    parse_cgi(&r.stdout)
+}
+
+/// Share of visits with a known country over the seeded domains (last 30 days).
+fn seeded_known_share(env: &Env) -> (i64, i64) {
+    let (mut t, mut u) = (0i64, 0i64);
+    for (user, d) in [
+        ("alice", "example.com"),
+        ("alice", "shop.example.com"),
+        ("bob", "blog.net"),
+    ] {
+        let db =
+            rusqlite::Connection::open(env.root.join(format!("var/webpulse/data/{user}/{d}.db")))
+                .unwrap();
+        let (a, b): (i64, i64) = db
+            .query_row(
+                "SELECT COALESCE(SUM(visits),0), COALESCE(SUM(CASE WHEN key = '(unknown)' THEN visits ELSE 0 END),0) FROM dim_daily WHERE dim = 'country' AND day >= '2026-09-17'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        t += a;
+        u += b;
+    }
+    (t, u)
+}
+
+#[test]
+fn admin_geoip_status_without_and_with_a_database() {
+    let env = fresh(SEED, "http-api-geoip");
+    let g = ok(
+        &api(&env, "admin", &[("a", "admin.geoip")], None),
+        "admin.geoip",
+    );
+    keys_present(
+        &[
+            "enabled",
+            "dir",
+            "country",
+            "city",
+            "url",
+            "url_preview",
+            "url_default",
+            "url_overridden",
+            "cron",
+            "last_job",
+            "known_country_30d",
+            "attribution",
+            "provider",
+            "can_edit",
+        ],
+        &g,
+        "admin.geoip",
+    );
+    let dir = env.root.join("var/webpulse/geoip");
+    assert_eq!(g["enabled"], json!(false));
+    assert_eq!(g["dir"], json!(dir.display().to_string()));
+    assert_eq!(
+        g["country"],
+        json!({"path": dir.join("dbip-country-lite.mmdb").display().to_string(), "present": false,
+               "bytes": null, "mtime": null, "metadata": null, "error": null})
+    );
+    assert_eq!(g["city"], Value::Null);
+    assert_eq!(
+        g["url"],
+        json!("https://download.db-ip.com/free/dbip-country-lite-{YYYY}-{MM}.mmdb.gz")
+    );
+    assert_eq!(
+        g["url_preview"],
+        json!("https://download.db-ip.com/free/dbip-country-lite-2026-10.mmdb.gz")
+    );
+    assert_eq!(g["url_overridden"], json!(false));
+    assert_eq!(g["cron"]["present"], json!(false));
+    assert_eq!(g["cron"]["scheduled"], json!(false));
+    assert_eq!(g["last_job"], Value::Null);
+    assert_eq!(g["attribution"], Value::Null);
+    assert_eq!(
+        g["provider"]["url"],
+        json!("https://db-ip.com/db/download/ip-to-country-lite")
+    );
+    assert_eq!(g["provider"]["license"], json!("CC BY 4.0"));
+    assert_eq!(g["can_edit"], json!(true));
+    let (t, u) = seeded_known_share(&env);
+    assert!(t > 0 && u > 0, "seeded countries include (unknown)");
+    let k = &g["known_country_30d"];
+    assert_eq!(k["visits"], json!(t));
+    assert_eq!(k["known"], json!(t - u));
+    assert_eq!(k["domains"], json!(3));
+    assert_eq!(k["partial"], json!(false));
+    let share = k["share"].as_f64().unwrap();
+    assert!((share - (t - u) as f64 / t as f64).abs() < 0.0001, "{k}");
+
+    // a DB-IP database, the cron line and GeoIP on
+    std::fs::write(
+        dir.join("dbip-country-lite.mmdb"),
+        tiny_mmdb("DBIP-Country-Lite"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(env.root.join("etc/cron.d")).unwrap();
+    std::fs::write(
+        env.root.join("etc/cron.d/webpulse"),
+        "# WebPulse\n*/5 * * * * root /usr/local/webpulse/bin/webpulse collect --quiet\n30 4 1 * * root /usr/local/webpulse/bin/webpulse geoip-update --quiet\n",
+    )
+    .unwrap();
+    ok(
+        &api(
+            &env,
+            "admin",
+            &[("a", "admin.save_settings")],
+            Some(json!({"settings": {"geoip.enabled": true}})),
+        ),
+        "enable",
+    );
+    let g = ok(
+        &api(&env, "admin", &[("a", "admin.geoip")], None),
+        "admin.geoip",
+    );
+    assert_eq!(g["enabled"], json!(true));
+    let c = &g["country"];
+    assert_eq!(c["present"], json!(true));
+    assert!(c["bytes"].as_u64().unwrap() > 0);
+    assert!(c["mtime"].is_string());
+    let m = &c["metadata"];
+    assert_eq!(m["database_type"], json!("DBIP-Country-Lite"));
+    assert_eq!(m["build_epoch"], json!(1_790_000_000u64));
+    assert_eq!(m["build_date"], json!("2026-09-21"));
+    assert_eq!(m["ip_version"], json!(6));
+    assert_eq!(m["languages"], json!(["en"]));
+    assert_eq!(m["dbip"], json!(true));
+    assert!(m["node_count"].as_u64().unwrap() > 0);
+    assert_eq!(g["attribution"], json!("IP Geolocation by DB-IP"));
+    assert_eq!(g["cron"]["scheduled"], json!(true));
+    assert_eq!(
+        g["cron"]["line"],
+        json!("30 4 1 * * root /usr/local/webpulse/bin/webpulse geoip-update --quiet")
+    );
+
+    // a city database that is not a DB-IP one, and a corrupt country file
+    std::fs::write(dir.join("city.mmdb"), tiny_mmdb("WebPulse-City")).unwrap();
+    ok(
+        &api(
+            &env,
+            "admin",
+            &[("a", "admin.save_settings")],
+            Some(
+                json!({"settings": {"geoip.city_db": dir.join("city.mmdb").display().to_string()}}),
+            ),
+        ),
+        "city_db",
+    );
+    std::fs::write(dir.join("dbip-country-lite.mmdb"), b"not a database").unwrap();
+    let g = ok(
+        &api(&env, "admin", &[("a", "admin.geoip")], None),
+        "admin.geoip",
+    );
+    assert_eq!(g["country"]["metadata"], Value::Null);
+    assert_eq!(g["country"]["error"], json!("not a valid MaxMind DB file"));
+    assert_eq!(
+        g["city"]["metadata"]["database_type"],
+        json!("WebPulse-City")
+    );
+    assert_eq!(g["city"]["metadata"]["dbip"], json!(false));
+    assert_eq!(g["attribution"], Value::Null);
+
+    // resellers see the status (their domains only) but cannot change anything
+    let r = ok(
+        &api(&env, "reseller:reseller1", &[("a", "admin.geoip")], None),
+        "reseller admin.geoip",
+    );
+    assert_eq!(r["can_edit"], json!(false));
+    assert!(r["known_country_30d"]["domains"].as_i64().unwrap() < 3);
+    err(
+        &api(&env, "user:alice", &[("a", "admin.geoip")], None),
+        403,
+        "forbidden",
+        "cPanel users",
+    );
+}
+
+#[test]
+fn admin_save_settings_validates_geoip_url_and_city_db() {
+    let env = fresh(SEED, "http-api-geoip-settings");
+    let dir = env.root.join("var/webpulse/geoip");
+    let save = |v: Value| {
+        api(
+            &env,
+            "admin",
+            &[("a", "admin.save_settings")],
+            Some(json!({ "settings": v })),
+        )
+    };
+    let geo = || ok(&api(&env, "admin", &[("a", "admin.geoip")], None), "geoip");
+    // admin.settings keeps the 0.1.0 shape
+    let st = ok(
+        &api(&env, "admin", &[("a", "admin.settings")], None),
+        "settings",
+    );
+    assert_eq!(st["settings"].as_object().unwrap().len(), 9);
+
+    let good = "https://mirror.example.net/geo/dbip-country-lite-{YYYY}-{MM}.mmdb.gz";
+    let r = ok(&save(json!({"geoip.url": good})), "good url");
+    assert_eq!(r["settings"].as_object().unwrap().len(), 9, "same shape");
+    let g = geo();
+    assert_eq!(g["url"], json!(good));
+    assert_eq!(g["url_overridden"], json!(true));
+    assert_eq!(
+        g["url_preview"],
+        json!("https://mirror.example.net/geo/dbip-country-lite-2026-10.mmdb.gz")
+    );
+    ok(
+        &save(json!({"geoip.url": "https://x.example/plain.mmdb"})),
+        "plain .mmdb",
+    );
+    for bad in [
+        json!("http://x.example/a.mmdb.gz"),
+        json!("ftp://x.example/a.mmdb"),
+        json!("https://x.example/a.zip"),
+        json!("https://x.example/a-{YY}.mmdb"),
+        json!("https://{YYYY}.example/a.mmdb"),
+        json!("https:///a.mmdb"),
+        json!("https://x.example/a b.mmdb"),
+        json!("file:///etc/passwd"),
+        json!(42),
+    ] {
+        let r = save(json!({ "geoip.url": bad }));
+        assert_eq!(r.status, 400, "geoip.url {bad}: {}", r.body);
+        assert!(r.body.contains("geoip.url"), "{}", r.body);
+    }
+    ok(&save(json!({"geoip.url": ""})), "reset url");
+    let g = geo();
+    assert_eq!(
+        g["url"],
+        json!("https://download.db-ip.com/free/dbip-country-lite-{YYYY}-{MM}.mmdb.gz")
+    );
+
+    // city database: an existing .mmdb file in the GeoIP directory
+    let city = dir.join("dbip-city-lite.mmdb");
+    std::fs::write(&city, tiny_mmdb("DBIP-City-Lite")).unwrap();
+    std::fs::write(dir.join("junk.mmdb"), b"junk").unwrap();
+    std::fs::write(dir.join("city.dat"), tiny_mmdb("x")).unwrap();
+    let outside = env.root.join("city.mmdb");
+    std::fs::write(&outside, tiny_mmdb("x")).unwrap();
+    ok(
+        &save(json!({"geoip.city_db": city.display().to_string()})),
+        "good city_db",
+    );
+    assert_eq!(geo()["city"]["path"], json!(city.display().to_string()));
+    for bad in [
+        "dbip-city-lite.mmdb".to_string(),
+        outside.display().to_string(),
+        dir.join("missing.mmdb").display().to_string(),
+        dir.join("city.dat").display().to_string(),
+        dir.join("junk.mmdb").display().to_string(),
+        format!("{}/../geoip/dbip-city-lite.mmdb", dir.display()),
+        dir.display().to_string(),
+    ] {
+        let r = save(json!({ "geoip.city_db": bad }));
+        assert_eq!(r.status, 400, "geoip.city_db {bad}: {}", r.body);
+        assert!(r.body.contains("geoip.city_db"), "{}", r.body);
+    }
+    assert_eq!(
+        geo()["city"]["path"],
+        json!(city.display().to_string()),
+        "unchanged"
+    );
+    ok(&save(json!({"geoip.city_db": ""})), "clear city_db");
+    assert_eq!(geo()["city"], Value::Null);
+    // resellers cannot save
+    let r = api(
+        &env,
+        "reseller:reseller1",
+        &[("a", "admin.save_settings")],
+        Some(json!({"settings": {"geoip.url": good}})),
+    );
+    assert_eq!(r.status, 403);
+    // the CLI validates the same way
+    let cfg = ("WEBPULSE_CONFIG", env.config.display().to_string());
+    let r = run(
+        &["config", "set", "geoip.url", "http://x.example/a.mmdb"],
+        std::slice::from_ref(&cfg),
+        b"",
+    );
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    let r = run(
+        &[
+            "config",
+            "set",
+            "geoip.city_db",
+            &city.display().to_string(),
+        ],
+        &[cfg],
+        b"",
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+}
+
+#[test]
+fn admin_run_geoip_update_downloads_and_finishes_the_job() {
+    let env = fresh(SEED, "http-api-geoip-run");
+    let base = fake_download(200, gzip(&tiny_mmdb("DBIP-Country-Lite")));
+    patch_config(&env, |c| {
+        c["geoip"]["url"] = json!(format!("{base}/dbip-country-lite-{{YYYY}}-{{MM}}.mmdb.gz"));
+    });
+    // GeoIP is off: the download still runs (download only)
+    let c = whm_run(&env, r#"{"type":"geoip-update"}"#);
+    assert_eq!(c.status, 200, "{}", c.text());
+    let d = c.json()["data"].clone();
+    assert_eq!(d["enabled"], json!(false));
+    let id = d["job_id"].as_i64().unwrap();
+    let j = wait_job(&env, id);
+    assert_eq!(j["type"], json!("geoip-update"));
+    assert_eq!(j["scope"], json!("all"));
+    assert_eq!(j["status"], json!("ok"), "{j}");
+    assert!(
+        j["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("installed DBIP-Country-Lite built 2026-09-21"),
+        "{j}"
+    );
+    let g = ok(
+        &api(&env, "admin", &[("a", "admin.geoip")], None),
+        "admin.geoip",
+    );
+    assert_eq!(
+        g["country"]["metadata"]["database_type"],
+        json!("DBIP-Country-Lite")
+    );
+    assert_eq!(g["last_job"]["id"], json!(id));
+    assert_eq!(g["last_job"]["status"], json!("ok"));
+    assert_eq!(g["attribution"], Value::Null, "GeoIP is still off");
+
+    // a failing download: job error with the HTTP status, the database is kept
+    let bad = fake_download(404, b"nope".to_vec());
+    patch_config(&env, |c| {
+        c["geoip"]["url"] = json!(format!("{bad}/dbip-country-lite-{{YYYY}}-{{MM}}.mmdb.gz"));
+    });
+    let c = whm_run(&env, r#"{"type":"geoip-update"}"#);
+    assert_eq!(c.status, 200, "{}", c.text());
+    let id = c.json()["data"]["job_id"].as_i64().unwrap();
+    let j = wait_job(&env, id);
+    assert_eq!(j["status"], json!("error"), "{j}");
+    assert!(j["message"].as_str().unwrap().contains("HTTP 404"), "{j}");
+    let g = ok(
+        &api(&env, "admin", &[("a", "admin.geoip")], None),
+        "admin.geoip",
+    );
+    assert_eq!(
+        g["country"]["present"],
+        json!(true),
+        "previous database kept"
+    );
+    assert_eq!(g["last_job"]["status"], json!("error"));
+
+    // a download already running: 409; resellers: 403
+    registry_db(&env)
+        .execute(
+            "INSERT INTO jobs (type, scope, started_at, status) VALUES ('geoip-update', 'all', ?, 'running')",
+            [NOW],
+        )
+        .unwrap();
+    let c = whm_run(&env, r#"{"type":"geoip-update"}"#);
+    assert_eq!(c.status, 409, "{}", c.text());
+    err(
+        &api(
+            &env,
+            "reseller:reseller1",
+            &[("a", "admin.run")],
+            Some(json!({"type": "geoip-update"})),
+        ),
+        403,
+        "forbidden",
+        "reseller geoip-update",
+    );
 }

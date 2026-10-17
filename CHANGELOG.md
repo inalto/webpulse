@@ -4,6 +4,27 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-17
+
+### Added
+- GeoIP card in WHM (status, download, URL and city database settings; DB-IP attribution). The
+  Server view gets a **GeoIP** card (administrators and resellers; only root changes things): the
+  share of visits of the last 30 days with a known country, geolocation on/off, the country and
+  city databases (type and build date read from the MMDB metadata, size, IP version, nodes,
+  languages, path, file date), whether the monthly `geoip-update` cron line is installed and the
+  last download job. Root can switch **Geolocate visitors**, start **Download database now**
+  (`admin.run {type: "geoip-update"}`, progress polled like the upgrade; works while GeoIP is off)
+  and edit `geoip.url` and `geoip.city_db`, which become run-time settings (validated: https and
+  `.mmdb`/`.mmdb.gz` for the URL, an existing `.mmdb` file in the GeoIP directory for the city
+  database). New API action `admin.geoip`. The **GeoIP** line of the Integration tile jumps to the
+  card. While a DB-IP database is in use, dashboard footers show "IP Geolocation by DB-IP" (CC BY
+  4.0).
+- `webpulse geoip-update --job [ID]`; every run is recorded in the job history when the registry
+  exists.
+
+### Changed
+- The inline dashboard payload budget is 240 KB (was 200 KB).
+
 ## [0.4.1] - 2026-10-17
 
 ### Fixed
@@ -201,6 +222,7 @@ First public version.
   resellers no longer read global settings; log messages are sanitised; `\z` anchors in name validation and a
   single account-name rule.
 
+[0.5.0]: https://github.com/inalto/webpulse/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/inalto/webpulse/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/inalto/webpulse/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/inalto/webpulse/compare/v0.2.4...v0.3.0

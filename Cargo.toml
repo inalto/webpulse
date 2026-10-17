@@ -1,6 +1,6 @@
 [package]
 name = "webpulse"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "Lightweight, log-based web analytics for cPanel & WHM: collector, CLI, JSON API and dashboard in one static binary"
 license = "MIT"

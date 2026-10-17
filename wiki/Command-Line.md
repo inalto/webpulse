@@ -173,13 +173,17 @@ its data directory and registry rows are removed too. `--yes` is mandatory.
 ### geoip-update
 
 Downloads the free DB-IP country database for the current month (the previous month if that fails),
-validates it and replaces `geoip.country_db` atomically. It does nothing unless `geoip.enabled` is true.
+validates it and replaces `geoip.country_db` atomically. It does nothing unless `geoip.enabled` is true,
+or `--force` (download only; WHM's **Download database now** uses it so the file can be installed
+before GeoIP is switched on).
 
 ```
-webpulse geoip-update [--force] [--url URL] [--out FILE]
+webpulse geoip-update [--force] [--url URL] [--out FILE] [--job [ID]]
 ```
 
-`--url` may contain `{YYYY}` and `{MM}`; `file://` URLs and local paths work. `--out` writes elsewhere.
+`--url` may contain `{YYYY}` and `{MM}` (default `geoip.url`); `file://` URLs and local paths work.
+`--out` writes elsewhere. Each run that downloads is recorded in the job history (WHM's GeoIP card
+shows the last one) when the registry exists; `--job ID` adopts a row created by WHM.
 
 ### update-check
 

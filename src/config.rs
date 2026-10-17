@@ -100,6 +100,8 @@ pub const EDITABLE: &[&str] = &[
     "exclude_paths",
     "count_head_requests",
     "geoip.enabled",
+    "geoip.url",
+    "geoip.city_db",
     "static_prefixes",
     "update.check",
 ];
@@ -400,9 +402,26 @@ impl Config {
         &self.merged
     }
 
+    /// Directory of the GeoIP databases: the directory of `geoip.country_db`.
+    pub fn geoip_dir(&self) -> PathBuf {
+        geoip_dir_of(self.get_str("geoip.country_db").as_deref())
+    }
+
+    /// [`Config::validate`] with the GeoIP directory of this configuration (an
+    /// optional city database must be a file inside it).
+    pub fn validate_here(&self, key: &str, value: &Value) -> Result<Value> {
+        Config::validate_with(key, value, &self.geoip_dir())
+    }
+
     /// Validates and normalises a value for an editable key (`Config::validate`); the
-    /// error message is the user-facing one of 0.1.0.
+    /// error message is the user-facing one of 0.1.0. `geoip.city_db` is checked
+    /// against the default GeoIP directory (see [`Config::validate_here`]).
     pub fn validate(key: &str, value: &Value) -> Result<Value> {
+        Config::validate_with(key, value, &geoip_dir_of(None))
+    }
+
+    /// [`Config::validate`] with an explicit GeoIP directory.
+    pub fn validate_with(key: &str, value: &Value, geoip_dir: &Path) -> Result<Value> {
         if !EDITABLE.contains(&key) {
             return Err(anyhow!(
                 "setting '{key}' cannot be changed at run time (edit config.json)"
@@ -483,6 +502,8 @@ impl Config {
             },
             "exclude_ips" => list(500, &ip::is_valid_cidr, "IP/CIDR"),
             "exclude_paths" | "static_prefixes" => list(200, &path_prefix, "path prefix"),
+            "geoip.url" => validate_geoip_url(value),
+            "geoip.city_db" => validate_city_db(value, geoip_dir),
             _ => Err(anyhow!(
                 "setting '{key}' cannot be changed at run time (edit config.json)"
             )),
@@ -496,6 +517,90 @@ impl Config {
         }
         std::fs::write(path, FILE_DEFAULT_JSON)
             .with_context(|| format!("writing {}", path.display()))
+    }
+}
+
+/// Directory of a country database path (default `/var/webpulse/geoip`).
+fn geoip_dir_of(country_db: Option<&str>) -> PathBuf {
+    let default = "/var/webpulse/geoip/dbip-country-lite.mmdb";
+    let db = country_db.filter(|s| s.starts_with('/')).unwrap_or(default);
+    Path::new(db)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// `geoip.url`: an `https://` URL of a `.mmdb` or `.mmdb.gz` file, optionally with the
+/// `{YYYY}` and `{MM}` placeholders; empty or null resets it (built-in DB-IP URL).
+pub fn validate_geoip_url(value: &Value) -> Result<Value> {
+    let s = match value {
+        Value::Null => return Ok(Value::Null),
+        Value::String(s) => s.trim(),
+        _ => return Err(anyhow!("geoip.url must be a string")),
+    };
+    if s.is_empty() || s == "null" {
+        return Ok(Value::Null);
+    }
+    let bad = || {
+        anyhow!(
+            "geoip.url must be an https:// URL ending in .mmdb or .mmdb.gz ({{YYYY}} and {{MM}} are replaced by the year and month)"
+        )
+    };
+    let lower = s.to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("https://") else {
+        return Err(bad());
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let path = rest.split(['?', '#']).next().unwrap_or("");
+    let stripped = lower.replace("{yyyy}", "").replace("{mm}", "");
+    if s.len() > 500
+        || host.is_empty()
+        || host.contains('{')
+        || s.bytes().any(|b| b <= 0x20 || b == 0x7f || b == b'\\')
+        || stripped.contains(['{', '}'])
+        || !(path.ends_with(".mmdb") || path.ends_with(".mmdb.gz"))
+    {
+        return Err(bad());
+    }
+    Ok(Value::from(s))
+}
+
+/// `geoip.city_db`: an existing `.mmdb` file inside `dir` (the directory of the country
+/// database), or empty / null for none.
+pub fn validate_city_db(value: &Value, dir: &Path) -> Result<Value> {
+    let s = match value {
+        Value::Null => return Ok(Value::Null),
+        Value::String(s) => s.trim(),
+        _ => return Err(anyhow!("geoip.city_db must be a string")),
+    };
+    if s.is_empty() || s == "null" {
+        return Ok(Value::Null);
+    }
+    let p = Path::new(s);
+    let inside = p.parent() == Some(dir)
+        || std::fs::canonicalize(dir)
+            .ok()
+            .zip(p.parent().and_then(|d| std::fs::canonicalize(d).ok()))
+            .is_some_and(|(a, b)| a == b);
+    if !s.starts_with('/')
+        || s.len() > 255
+        || s.bytes().any(|b| b < 0x20)
+        || s.split('/').any(|c| c == "..")
+        || !s.to_ascii_lowercase().ends_with(".mmdb")
+        || !inside
+    {
+        return Err(anyhow!(
+            "geoip.city_db must be an .mmdb file in {}",
+            dir.display()
+        ));
+    }
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.file_type().is_file() => {
+            crate::engine::classify::geoip::read_metadata(p)
+                .map_err(|_| anyhow!("geoip.city_db: {s} is not a MaxMind DB file"))?;
+            Ok(Value::from(s))
+        }
+        _ => Err(anyhow!("geoip.city_db: {s} is not a regular file")),
     }
 }
 
