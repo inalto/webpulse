@@ -96,4 +96,5 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck -S warning install.sh uninstall.sh installer/lib.sh hooks/*.sh scripts/*.sh whm/cgi/*.cgi
+          # whm/cgi/index.cgi is Perl: only the bash CGI is shell-checked
+          shellcheck -S warning install.sh uninstall.sh installer/lib.sh hooks/*.sh scripts/*.sh whm/cgi/api.cgi
