@@ -325,3 +325,23 @@ fn ui_assets_size_no_inner_html_no_external_urls() {
     }
     assert!(total < 200 * 1024, "inline payload under 200 KB");
 }
+
+#[test]
+fn embedded_header_keeps_a_stacking_context_above_the_content() {
+    // regression: with position:static the header's backdrop-filter context painted the
+    // popovers under later KPI tiles inside WHM/cPanel chrome
+    let css = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/app.css")).unwrap();
+    let rule = css
+        .split('}')
+        .find(|r| r.contains(".wp-root[data-embedded=\"1\"] .wp-header"))
+        .expect("embedded header rule");
+    assert!(
+        rule.contains("position: relative"),
+        "embedded header is positioned: {rule}"
+    );
+    assert!(
+        rule.contains("z-index: 20"),
+        "embedded header keeps its z-index: {rule}"
+    );
+    assert!(!rule.contains("static"), "{rule}");
+}

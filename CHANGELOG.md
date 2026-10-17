@@ -4,6 +4,13 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-10-17
+
+### Fixed
+- Embedded dashboards (WHM, cPanel): the domain switcher and update popovers
+  were painted under the KPI tiles because the header lost its stacking order
+  in embedded mode.
+
 ## [0.4.0] - 2026-10-17
 
 ### Added
@@ -194,6 +201,7 @@ First public version.
   resellers no longer read global settings; log messages are sanitised; `\z` anchors in name validation and a
   single account-name rule.
 
+[0.4.1]: https://github.com/inalto/webpulse/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/inalto/webpulse/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/inalto/webpulse/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/inalto/webpulse/compare/v0.2.3...v0.2.4

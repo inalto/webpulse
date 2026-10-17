@@ -116,7 +116,10 @@ body.wp-body .wp-root { min-height: 100vh; }
   backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px);
   border-bottom: 1px solid var(--wp-line);
 }
-.wp-root[data-embedded="1"] .wp-header { position: static; }
+/* Embedded (cPanel/WHM chrome): not sticky, but keep a stacking context ABOVE the content.
+   The backdrop-filter above already creates a context; with position:static the z-index
+   would be ignored and the domain/update popovers would paint under later KPI tiles. */
+.wp-root[data-embedded="1"] .wp-header { position: relative; z-index: 20; }
 .wp-header-inner { max-width: 1320px; margin: 0 auto; padding: 12px 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
 .wp-brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 16px; letter-spacing: -0.01em; color: var(--wp-ink); margin-right: 6px; }
 .wp-brand svg { display: block; }
