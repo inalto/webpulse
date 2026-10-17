@@ -331,17 +331,17 @@ fn embedded_header_keeps_a_stacking_context_above_the_content() {
     // regression: with position:static the header's backdrop-filter context painted the
     // popovers under later KPI tiles inside WHM/cPanel chrome
     let css = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/app.css")).unwrap();
-    let rule = css
-        .split('}')
-        .find(|r| r.contains(".wp-root[data-embedded=\"1\"] .wp-header"))
-        .expect("embedded header rule");
+    let selector = ".wp-root[data-embedded=\"1\"] .wp-header {";
+    let start = css.find(selector).expect("embedded header rule") + selector.len();
+    let end = css[start..].find('}').unwrap() + start;
+    let decls = &css[start..end];
     assert!(
-        rule.contains("position: relative"),
-        "embedded header is positioned: {rule}"
+        decls.contains("position: relative"),
+        "embedded header is positioned: {decls}"
     );
     assert!(
-        rule.contains("z-index: 20"),
-        "embedded header keeps its z-index: {rule}"
+        decls.contains("z-index: 20"),
+        "embedded header keeps its z-index: {decls}"
     );
-    assert!(!rule.contains("static"), "{rule}");
+    assert!(!decls.contains("static"), "{decls}");
 }
