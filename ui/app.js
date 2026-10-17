@@ -232,6 +232,9 @@
           err.status = res.status;
           throw err;
         }
+        // a mutation changes what GETs would return: drop the whole GET cache so that
+        // reloads (GeoIP card, settings, accounts) show the saved state, not a stale copy
+        if (body) S.cache = {};
         return j.data;
       });
     }, function () {

@@ -436,3 +436,16 @@ fn dashboard_footer_credits_db_ip_while_its_database_is_used() {
         "not a DB-IP database: no credit"
     );
 }
+
+#[test]
+fn mutations_invalidate_the_get_cache_in_the_spa() {
+    // regression: the GeoIP toggle saved fine but the card reloaded admin.geoip from
+    // the GET cache and showed the old value
+    let js = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/app.js")).unwrap();
+    let api_start = js.find("function api(params, body)").expect("api()");
+    let api_body = &js[api_start..api_start + 2500];
+    assert!(
+        api_body.contains("if (body) S.cache = {};"),
+        "api() must drop the GET cache after a mutation"
+    );
+}
