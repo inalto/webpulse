@@ -718,7 +718,10 @@
     var dot = ctx.h('span', 'wp-bell-dot', null, b);
     // visible call to action next to the bell: "Update to X.Y.Z" (root only) opens the
     // popover straight in its confirmation step
-    var cta = ctx.btn('wp-upd-cta is-primary', '', function () {
+    var cta = ctx.btn('wp-upd-cta is-primary', '', function (ev) {
+      // keep this click from reaching the document-level "click outside closes
+      // popovers" handler, which would remove the popover opened just below
+      if (ev) ev.stopPropagation();
       updAct(ctx, 'confirm');
       updNotify();
       if (b.getAttribute('aria-expanded') !== 'true') b.click();

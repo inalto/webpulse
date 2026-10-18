@@ -4,6 +4,14 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-10-18
+
+### Fixed
+- The "Update to X.Y.Z" header button opened the Updates popover and the same
+  click immediately closed it again (the click reached the page-wide "click
+  outside closes popovers" handler). The confirmation now stays open. Covered by
+  a headless-browser test.
+
 ## [0.6.3] - 2026-10-18
 
 ### Changed
