@@ -939,7 +939,7 @@ fn update_info(ctx: &Ctx, p: &Principal) -> R {
 }
 
 /// `admin.update_check` (root, POST): asks GitHub again unless the last check is
-/// less than an hour old (then the cached status comes back with `throttled`).
+/// less than five minutes old (then the cached status comes back with `throttled`).
 fn update_check(ctx: &Ctx, p: &Principal) -> R {
     if !p.is_admin() {
         return Err(

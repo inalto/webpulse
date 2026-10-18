@@ -155,7 +155,7 @@ same information is in the **Updates** card at the bottom of the server view.
   the job and, when it is done, shows "Upgraded to X.Y.Z" and reloads the page after 5 seconds. If the
   installer fails, the message says so and the full output is in `/var/webpulse/log/upgrade.log`
   (the installer puts the previous release back by itself).
-- **Check again** asks GitHub right away (at most once an hour; within the hour you get the last
+- **Check again** asks GitHub right away (at most once every five minutes; within that window you get the last
   result).
 - Resellers see the notice and the release notes link, not the buttons.
 

@@ -1624,7 +1624,7 @@ fn update_check_cli_cache_admin_update_and_throttle() {
         "user",
     );
 
-    // admin.update_check: POST, root only, throttled to once an hour
+    // admin.update_check: POST, root only, throttled to once every five minutes
     err(
         &api(
             &env,
@@ -1659,9 +1659,13 @@ fn update_check_cli_cache_admin_update_and_throttle() {
         ),
         "check",
     );
-    assert_eq!(c["throttled"], json!(true), "checked less than an hour ago");
+    assert_eq!(
+        c["throttled"],
+        json!(true),
+        "checked less than five minutes ago"
+    );
     assert_eq!(hits.load(Ordering::SeqCst), n);
-    age_update_status(&env, 3601);
+    age_update_status(&env, 301);
     let c = ok(
         &api(
             &env,

@@ -96,7 +96,7 @@
     'upd.h.err': 'Update check failed', 'upd.current': 'Installed', 'upd.latest': 'Latest',
     'upd.released': 'Released {d}', 'upd.checked': 'Checked {ago}', 'upd.never': 'Never checked',
     'upd.notes': 'Release notes', 'upd.now': 'Upgrade now', 'upd.cta': 'Update to {v}', 'upd.stale': 'The last check predates this version; use Check again.', 'upd.again': 'Check again', 'upd.checking': 'Checking…',
-    'upd.throttled': 'Checked less than an hour ago; this is the last result.',
+    'upd.throttled': 'Checked less than five minutes ago; this is the last result.',
     'upd.confirm': 'Upgrade to {v}? The WHM pages stay available during the upgrade, which takes about a minute.',
     'upd.go': 'Upgrade to {v}', 'upd.cancel': 'Cancel', 'upd.running': 'Upgrading to {v}…',
     'upd.running.sub': 'install.sh is running on the server (job #{id}, {s} s).',

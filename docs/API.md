@@ -204,7 +204,7 @@ a DB-IP database is in use. (`a=ping` remains: `{version, principal}`.)
   upgrade_job (root only: the newest job of type upgrade, or null)}`. The check itself runs on the
   server (`webpulse update-check`, the nightly rollup); the browser never contacts GitHub.
 * `a=admin.update_check` (POST, root only) – asks GitHub again unless the last check is less than
-  an hour old; returns the `admin.update` object plus `throttled` (true = cached result returned).
+  five minutes old; returns the `admin.update` object plus `throttled` (true = cached result returned).
 * `a=admin.purge` (POST `{user, domain?, confirm: "DELETE"}`, root only) –
   deletes the domain DB(s).
 * Domain reports (`overview`, `report`, …) work for admins with any

@@ -26,7 +26,7 @@ pub const DEFAULT_REPO: &str = "inalto/webpulse";
 /// The nightly check skips the network when the last check is newer than this.
 pub const CACHE_SECONDS: i64 = 20 * 3600;
 /// "Check again" in WHM goes to the network at most this often.
-pub const THROTTLE_SECONDS: i64 = 3600;
+pub const THROTTLE_SECONDS: i64 = 300;
 /// Request timeout.
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 /// Largest response body accepted.
