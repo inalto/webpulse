@@ -354,6 +354,15 @@ pub fn is_stale(prev: Option<&Value>, now: i64, max_age: i64) -> bool {
     at <= 0 || now - at >= max_age || at > now + 300
 }
 
+/// The installed version is ahead of the cached "latest": the status predates an
+/// upgrade (or a pre-release is running) and must not be shown as "latest X" nor
+/// hold back a re-check.
+pub fn is_behind(prev: Option<&Value>, current: &str) -> bool {
+    str_field(prev, "latest")
+        .as_str()
+        .is_some_and(|l| is_newer(current, l))
+}
+
 /// Runs a check: the network is used when `force` or the status is older than
 /// [`CACHE_SECONDS`]. Returns the new status and whether the network was used.
 pub fn check(
@@ -363,7 +372,7 @@ pub fn check(
     now: i64,
     force: bool,
 ) -> (Value, bool) {
-    if !force && !is_stale(prev, now, CACHE_SECONDS) {
+    if !force && !is_stale(prev, now, CACHE_SECONDS) && !is_behind(prev, current) {
         return (view(prev, current), false);
     }
     let res = url.and_then(|u| fetch(&u));
@@ -377,9 +386,25 @@ pub fn check(
 /// A stored status re-evaluated against the running version (after an upgrade
 /// the stored `current` is stale); an empty status when nothing is stored.
 pub fn view(prev: Option<&Value>, current: &str) -> Value {
+    let at = checked_at(prev);
+    if is_behind(prev, current) {
+        // cached before this version was installed: report the running version as the
+        // latest known one and flag the status so a re-check bypasses the throttle
+        return json!({
+            "current": current,
+            "latest": current,
+            "tag": format!("v{current}"),
+            "is_newer": false,
+            "html_url": Value::Null,
+            "published_at": Value::Null,
+            "notes": Value::Null,
+            "checked_at": if at > 0 { json!(at) } else { Value::Null },
+            "error": str_field(prev, "error"),
+            "stale": true,
+        });
+    }
     let latest = str_field(prev, "latest");
     let newer = latest.as_str().is_some_and(|l| is_newer(l, current));
-    let at = checked_at(prev);
     json!({
         "current": current,
         "latest": latest,
@@ -390,6 +415,7 @@ pub fn view(prev: Option<&Value>, current: &str) -> Value {
         "notes": str_field(prev, "notes"),
         "checked_at": if at > 0 { json!(at) } else { Value::Null },
         "error": str_field(prev, "error"),
+        "stale": false,
     })
 }
 
@@ -426,6 +452,15 @@ mod tests {
     #[test]
     fn semver() {
         assert!(is_newer("0.4.0", "0.3.0"));
+        // installed ahead of the cached latest (status predates an upgrade)
+        let prev = json!({"latest": "0.6.0", "tag": "v0.6.0", "checked_at": 1_700_000_000, "html_url": "https://x/y"});
+        assert!(is_behind(Some(&prev), "0.6.1"));
+        assert!(!is_behind(Some(&prev), "0.6.0"));
+        let v = view(Some(&prev), "0.6.1");
+        assert_eq!(v["latest"], "0.6.1");
+        assert_eq!(v["is_newer"], false);
+        assert_eq!(v["stale"], true);
+        assert_eq!(view(Some(&prev), "0.6.0")["stale"], false);
         assert!(is_newer("v0.10.0", "0.9.9"));
         assert!(is_newer("1.0.0", "1.0.0-rc.2"));
         assert!(is_newer("1.0.0-rc.10", "1.0.0-rc.2"));

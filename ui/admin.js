@@ -663,6 +663,7 @@
       var bits = [];
       if (d.published_at) bits.push(t('upd.released', { d: ctx.dateFmtY.format(new Date(d.published_at)) }));
       bits.push(d.checked_at_iso ? t('upd.checked', { ago: ctx.ago(d.checked_at_iso) }) : t('upd.never'));
+        if (d.stale) h('p', 'wp-upd-note', t('upd.stale'), el);
       meta.textContent = bits.join('. ') + '.';
       if (d.html_url) {
         var a = h('a', 'wp-upd-link', t('upd.notes'), el);
@@ -715,9 +716,21 @@
   /** Header bell: badge dot and tooltip when a newer release is known. */
   function updBell(b, ctx) {
     var dot = ctx.h('span', 'wp-bell-dot', null, b);
+    // visible call to action next to the bell: "Update to X.Y.Z" (root only) opens the
+    // popover straight in its confirmation step
+    var cta = ctx.btn('wp-upd-cta is-primary', '', function () {
+      updAct(ctx, 'confirm');
+      updNotify();
+      if (b.getAttribute('aria-expanded') !== 'true') b.click();
+    });
+    cta.hidden = true;
+    if (b.parentNode) b.parentNode.insertBefore(cta, b);
     function draw() {
       if (!b.isConnected) return false;
       var d = U.data, newer = !!(d && d.is_newer && U.phase !== 'done');
+      var busy = U.phase === 'running' || U.phase === 'starting';
+      cta.hidden = !(newer && d.can_upgrade && !busy);
+      if (!cta.hidden) cta.textContent = ctx.t('upd.cta', { v: d.latest });
       dot.hidden = !newer && U.phase !== 'running';
       dot.classList.toggle('is-busy', U.phase === 'running' || U.phase === 'starting');
       var tip = newer ? ctx.t('upd.available', { v: d.latest }) : ctx.t('upd.bell');

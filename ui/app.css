@@ -178,6 +178,9 @@ body.wp-body .wp-root { min-height: 100vh; }
 .wp-server-btn[aria-pressed="true"] { background: var(--wp-ink); color: var(--wp-surface); border-color: var(--wp-ink); }
 
 /* update bell + panel (WHM) */
+.wp-bell-wrap { display: flex; align-items: center; gap: 8px; }
+.wp-upd-cta { font-weight: 600; white-space: nowrap; }
+@media (max-width: 640px) { .wp-upd-cta { display: none; } }
 .wp-bell { position: relative; }
 .wp-bell-dot { position: absolute; top: 5px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--wp-accent); box-shadow: 0 0 0 2px var(--wp-surface); }
 .wp-bell-dot.is-busy { animation: wp-blink 1.2s ease-in-out infinite; }

@@ -4,6 +4,19 @@ All notable changes to WebPulse are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-10-17
+
+### Added
+- WHM/Cockpit admin header: a visible "Update to X.Y.Z" button next to the bell
+  whenever a newer release is available (root only); it opens the upgrade
+  confirmation directly.
+
+### Fixed
+- After an upgrade the Updates popover could show "Installed 0.6.1 → Latest
+  0.6.0" from the cached check; a successful upgrade now discards the cached
+  status, and a status older than the running version is reported as up to
+  date and re-checked without the one-hour throttle.
+
 ## [0.6.1] - 2026-10-17
 
 ### Fixed

@@ -948,7 +948,8 @@ fn update_check(ctx: &Ctx, p: &Principal) -> R {
     }
     let prev = stored_update(ctx);
     let now = ctx.now();
-    let throttled = !update::is_stale(prev.as_ref(), now, update::THROTTLE_SECONDS);
+    let throttled = !update::is_stale(prev.as_ref(), now, update::THROTTLE_SECONDS)
+        && !update::is_behind(prev.as_ref(), App::version());
     if !throttled {
         let url = update::source_url(&ctx.app.config, update_override_allowed(ctx));
         let (st, _) = update::check(url, prev.as_ref(), App::version(), now, true);

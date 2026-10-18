@@ -1802,8 +1802,18 @@ fn admin_run_upgrade_runs_install_sh_and_finishes_the_job() {
     );
     assert_eq!(u["upgrade_job"]["id"], json!(id));
     assert_eq!(u["upgrade_job"]["status"], json!("ok"));
+    // a successful upgrade discards the cached release status (it predates the new
+    // version): nothing newer is known until the next check
+    assert_eq!(u["is_newer"], json!(false), "{u}");
+    assert_eq!(u["checked_at"], json!(null), "{u}");
 
-    // a failing installer: job error with the exit status
+    // a failing installer: job error with the exit status (re-seed the status first)
+    let r = run(
+        &["update-check", "--force", "--quiet"],
+        &[("WEBPULSE_CONFIG", env.config.display().to_string())],
+        b"",
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
     stub(1);
     let c = whm_post(&binary, &env, "admin.run", r#"{"type":"upgrade"}"#);
     assert_eq!(c.status, 200, "{}", c.text());

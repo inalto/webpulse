@@ -449,3 +449,17 @@ fn mutations_invalidate_the_get_cache_in_the_spa() {
         "api() must drop the GET cache after a mutation"
     );
 }
+
+#[test]
+fn admin_header_has_a_visible_update_button_next_to_the_bell() {
+    let js = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/admin.js")).unwrap();
+    assert!(js.contains("'wp-upd-cta is-primary'"), "CTA button class");
+    assert!(
+        js.contains("updAct(ctx, 'confirm')"),
+        "CTA opens the confirmation step"
+    );
+    let i18n = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/i18n.js")).unwrap();
+    assert!(i18n.contains("'upd.cta': 'Update to {v}'"), "CTA label");
+    let css = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/app.css")).unwrap();
+    assert!(css.contains(".wp-upd-cta"), "CTA styled");
+}

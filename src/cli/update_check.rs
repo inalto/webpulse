@@ -250,6 +250,11 @@ pub fn run_upgrade(ctx: &Ctx, raw: &RawArgs) -> Result<i32> {
             app.log
                 .info(format!("upgrade: install.sh finished, now {tag}"));
             finish("ok", &format!("Upgraded to {tag}"));
+            // the cached release status predates this version: drop it so the next
+            // page load or check fetches a fresh one instead of showing an older "latest"
+            if let Ok(reg) = app.registry() {
+                let _ = reg.delete_setting(update::SETTING_KEY);
+            }
             Ok(exit::OK)
         }
         Some(s) => {
